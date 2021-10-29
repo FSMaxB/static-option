@@ -95,12 +95,12 @@ impl<T> StaticOption<T, true> {
 
 	pub fn inner_ref(&self) -> &T {
 		// SAFETY: StaticOption<T, true> can only be constructed with a value inside (tracked by the `true`)
-		unsafe { self.value.assume_init_ref() }
+		unsafe { &*self.value.as_ptr() }
 	}
 
 	pub fn inner_mut(&mut self) -> &mut T {
 		// SAFETY: StaticOption<T, true> can only be constructed with a value inside (tracked by the `true`)
-		unsafe { self.value.assume_init_mut() }
+		unsafe { &mut *self.value.as_mut_ptr() }
 	}
 
 	pub fn as_ref(&self) -> StaticOption<&T, true> {
@@ -379,7 +379,7 @@ impl<T, const STATE: bool> StaticOption<T, STATE> {
 	pub fn as_option(&self) -> Option<&T> {
 		if STATE {
 			// SAFETY: StaticOption<T, true> can only be constructed with a value inside (tracked by the `true`)
-			Some(unsafe { self.value.assume_init_ref() })
+			Some(unsafe { &*self.value.as_ptr() })
 		} else {
 			None
 		}
@@ -388,7 +388,7 @@ impl<T, const STATE: bool> StaticOption<T, STATE> {
 	pub fn as_mut_option(&mut self) -> Option<&mut T> {
 		if STATE {
 			// SAFETY: StaticOption<T, true> can only be constructed with a value inside (tracked by the `true`)
-			Some(unsafe { self.value.assume_init_mut() })
+			Some(unsafe { &mut *self.value.as_mut_ptr() })
 		} else {
 			None
 		}
