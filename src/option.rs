@@ -77,7 +77,7 @@ use core::ptr::drop_in_place;
 /// assert_eq!(expected, point);
 /// ```
 #[must_use = "Call `.drop()` if you don't use the StaticOption, otherwise it's contents never get dropped."]
-pub struct StaticOption<T, const STATE: bool> {
+pub struct StaticOption<T, const IS_SOME: bool> {
 	value: MaybeUninit<T>,
 }
 
@@ -141,24 +141,24 @@ impl<T> StaticOption<T, true> {
 		StaticResult::ok(self.into_inner())
 	}
 
-	pub const fn and<U, const STATE: bool>(self, option_b: StaticOption<U, STATE>) -> StaticOption<U, STATE> {
+	pub const fn and<U, const IS_SOME: bool>(self, option_b: StaticOption<U, IS_SOME>) -> StaticOption<U, IS_SOME> {
 		option_b
 	}
 
-	pub fn and_then<U, F, const STATE: bool>(self, function: F) -> StaticOption<U, STATE>
+	pub fn and_then<U, F, const IS_SOME: bool>(self, function: F) -> StaticOption<U, IS_SOME>
 	where
-		F: FnOnce(T) -> StaticOption<U, STATE>,
+		F: FnOnce(T) -> StaticOption<U, IS_SOME>,
 	{
 		function(self.into_inner())
 	}
 
-	pub fn or<const STATE: bool>(self, _option_b: StaticOption<T, STATE>) -> Self {
+	pub fn or<const IS_SOME: bool>(self, _option_b: StaticOption<T, IS_SOME>) -> Self {
 		self
 	}
 
-	pub fn or_else<F, const STATE: bool>(self, _function: F) -> Self
+	pub fn or_else<F, const IS_SOME: bool>(self, _function: F) -> Self
 	where
-		F: FnOnce() -> StaticOption<T, STATE>,
+		F: FnOnce() -> StaticOption<T, IS_SOME>,
 	{
 		self
 	}
@@ -252,24 +252,24 @@ impl<T> StaticOption<T, false> {
 		StaticResult::err(error())
 	}
 
-	pub const fn and<U, const STATE: bool>(self, _option_b: StaticOption<U, STATE>) -> StaticOption<U, false> {
+	pub const fn and<U, const IS_SOME: bool>(self, _option_b: StaticOption<U, IS_SOME>) -> StaticOption<U, false> {
 		StaticOption::none()
 	}
 
-	pub fn and_then<U, F, const STATE: bool>(self, _function: F) -> StaticOption<U, false>
+	pub fn and_then<U, F, const IS_SOME: bool>(self, _function: F) -> StaticOption<U, false>
 	where
-		F: FnOnce(T) -> StaticOption<U, STATE>,
+		F: FnOnce(T) -> StaticOption<U, IS_SOME>,
 	{
 		StaticOption::none()
 	}
 
-	pub fn or<const STATE: bool>(self, option_b: StaticOption<T, STATE>) -> StaticOption<T, STATE> {
+	pub fn or<const IS_SOME: bool>(self, option_b: StaticOption<T, IS_SOME>) -> StaticOption<T, IS_SOME> {
 		option_b
 	}
 
-	pub fn or_else<F, const STATE: bool>(self, function: F) -> StaticOption<T, STATE>
+	pub fn or_else<F, const IS_SOME: bool>(self, function: F) -> StaticOption<T, IS_SOME>
 	where
-		F: FnOnce() -> StaticOption<T, STATE>,
+		F: FnOnce() -> StaticOption<T, IS_SOME>,
 	{
 		function()
 	}
@@ -312,13 +312,13 @@ impl<'a, T> StaticOption<&'a T, false> {
 	}
 }
 
-impl<T, const STATE: bool> StaticOption<T, STATE> {
+impl<T, const IS_SOME: bool> StaticOption<T, IS_SOME> {
 	pub const fn is_some(&self) -> bool {
-		STATE
+		IS_SOME
 	}
 
 	pub const fn is_none(&self) -> bool {
-		!STATE
+		!IS_SOME
 	}
 
 	pub fn expect(self, message: &str) -> T {
@@ -326,7 +326,7 @@ impl<T, const STATE: bool> StaticOption<T, STATE> {
 	}
 
 	pub fn unwrap(self) -> T {
-		if STATE {
+		if IS_SOME {
 			// SAFETY: StaticOption<T, true> can only be constructed with a value inside (tracked by the `true`)
 			unsafe { self.value.assume_init() }
 		} else {
@@ -361,14 +361,14 @@ impl<T, const STATE: bool> StaticOption<T, STATE> {
 	}
 
 	pub fn drop(mut self) {
-		if STATE {
+		if IS_SOME {
 			// SAFETY: StaticOption<T, true> can only be constructed with a value inside (tracked by the `true`)
 			unsafe { drop_in_place(self.value.as_mut_ptr()) }
 		}
 	}
 
 	pub fn into_option(self) -> Option<T> {
-		if STATE {
+		if IS_SOME {
 			// SAFETY: StaticOption<T, true> can only be constructed with a value inside (tracked by the `true`)
 			Some(unsafe { self.value.assume_init() })
 		} else {
@@ -377,7 +377,7 @@ impl<T, const STATE: bool> StaticOption<T, STATE> {
 	}
 
 	pub fn as_option(&self) -> Option<&T> {
-		if STATE {
+		if IS_SOME {
 			// SAFETY: StaticOption<T, true> can only be constructed with a value inside (tracked by the `true`)
 			Some(unsafe { &*self.value.as_ptr() })
 		} else {
@@ -386,7 +386,7 @@ impl<T, const STATE: bool> StaticOption<T, STATE> {
 	}
 
 	pub fn as_mut_option(&mut self) -> Option<&mut T> {
-		if STATE {
+		if IS_SOME {
 			// SAFETY: StaticOption<T, true> can only be constructed with a value inside (tracked by the `true`)
 			Some(unsafe { &mut *self.value.as_mut_ptr() })
 		} else {
@@ -403,8 +403,8 @@ impl<T> Default for StaticOption<T, false> {
 	}
 }
 
-impl<T, const STATE: bool> From<StaticOption<T, STATE>> for Option<T> {
-	fn from(static_option: StaticOption<T, STATE>) -> Self {
+impl<T, const IS_SOME: bool> From<StaticOption<T, IS_SOME>> for Option<T> {
+	fn from(static_option: StaticOption<T, IS_SOME>) -> Self {
 		static_option.into_option()
 	}
 }
@@ -427,7 +427,7 @@ where
 	}
 }
 
-impl<T, const STATE: bool> Debug for StaticOption<T, STATE>
+impl<T, const IS_SOME: bool> Debug for StaticOption<T, IS_SOME>
 where
 	T: Debug,
 {
@@ -463,14 +463,14 @@ impl<'a, T> From<&'a mut StaticOption<T, false>> for StaticOption<&'a mut T, fal
 	}
 }
 
-impl<'a, T, const STATE: bool> From<&'a StaticOption<T, STATE>> for Option<&'a T> {
-	fn from(static_option: &'a StaticOption<T, STATE>) -> Self {
+impl<'a, T, const IS_SOME: bool> From<&'a StaticOption<T, IS_SOME>> for Option<&'a T> {
+	fn from(static_option: &'a StaticOption<T, IS_SOME>) -> Self {
 		static_option.as_option()
 	}
 }
 
-impl<'a, T, const STATE: bool> From<&'a mut StaticOption<T, STATE>> for Option<&'a mut T> {
-	fn from(static_option: &'a mut StaticOption<T, STATE>) -> Self {
+impl<'a, T, const IS_SOME: bool> From<&'a mut StaticOption<T, IS_SOME>> for Option<&'a mut T> {
+	fn from(static_option: &'a mut StaticOption<T, IS_SOME>) -> Self {
 		static_option.as_mut_option()
 	}
 }
@@ -481,7 +481,7 @@ impl<T> From<T> for StaticOption<T, true> {
 	}
 }
 
-impl<T, const STATE: bool> Hash for StaticOption<T, STATE>
+impl<T, const IS_SOME: bool> Hash for StaticOption<T, IS_SOME>
 where
 	T: Hash,
 {
@@ -490,7 +490,7 @@ where
 	}
 }
 
-impl<T, const STATE: bool> IntoIterator for StaticOption<T, STATE> {
+impl<T, const IS_SOME: bool> IntoIterator for StaticOption<T, IS_SOME> {
 	type Item = T;
 	type IntoIter = IntoIter<T>;
 
@@ -499,7 +499,7 @@ impl<T, const STATE: bool> IntoIterator for StaticOption<T, STATE> {
 	}
 }
 
-impl<T, const STATE: bool> PartialEq for StaticOption<T, STATE>
+impl<T, const IS_SOME: bool> PartialEq for StaticOption<T, IS_SOME>
 where
 	T: PartialEq,
 {
@@ -508,7 +508,7 @@ where
 	}
 }
 
-impl<T, const STATE: bool> PartialOrd for StaticOption<T, STATE>
+impl<T, const IS_SOME: bool> PartialOrd for StaticOption<T, IS_SOME>
 where
 	T: PartialOrd,
 {
@@ -517,9 +517,9 @@ where
 	}
 }
 
-impl<T, const STATE: bool> Eq for StaticOption<T, STATE> where T: Eq {}
+impl<T, const IS_SOME: bool> Eq for StaticOption<T, IS_SOME> where T: Eq {}
 
-impl<T, const STATE: bool> Ord for StaticOption<T, STATE>
+impl<T, const IS_SOME: bool> Ord for StaticOption<T, IS_SOME>
 where
 	T: Ord,
 {
