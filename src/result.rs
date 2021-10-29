@@ -1,7 +1,8 @@
 use core::mem::ManuallyDrop;
+use core::ops::{Deref, DerefMut};
 
 #[must_use = "Call `.drop()` if you don't use the `StaticResult`, otherwise it's contents never get dropped."]
-pub union StaticResult<T, E, const STATE: bool> {
+pub union StaticResult<T, E, const IS_OK: bool> {
 	ok: ManuallyDrop<T>,
 	error: ManuallyDrop<E>,
 }
@@ -54,9 +55,9 @@ impl<T, E> StaticResult<T, E, false> {
 	}
 }
 
-impl<T, E, const STATE: bool> StaticResult<T, E, STATE> {
+impl<T, E, const IS_OK: bool> StaticResult<T, E, IS_OK> {
 	pub fn drop(mut self) {
-		if STATE {
+		if IS_OK {
 			// SAFETY: StaticResult<T, E, true> can only be constructed with ok value inside (tracked by the true)
 			// and it's insides are never dropped without dropping the entire StaticResult (happening here)
 			unsafe { ManuallyDrop::drop(&mut self.ok) }
@@ -64,6 +65,35 @@ impl<T, E, const STATE: bool> StaticResult<T, E, STATE> {
 			// SAFETY: StaticResult<T, E, false> can only be constructed with error value inside (tracked by the false)
 			// and it's insides are never dropped without dropping the entire StaticResult (happening here)
 			unsafe { ManuallyDrop::drop(&mut self.error) }
+		}
+	}
+
+	pub fn into_result(self) -> Result<T, E> {
+		if IS_OK {
+			// SAFETY: StaticResult<T, E, true> can only be constructed with ok value inside (tracked by the true)
+			Ok(ManuallyDrop::into_inner(unsafe { self.ok }))
+		} else {
+			// SAFETY: StaticResult<T, E, false> can only be constructed with error value inside (tracked by the false)
+			Err(ManuallyDrop::into_inner(unsafe { self.error }))
+		}
+	}
+
+	pub fn as_result(&self) -> Result<&T, &E> {
+		if IS_OK {
+			// SAFETY: StaticResult<T, E, true> can only be constructed with ok value inside (tracked by the true)
+			Ok(unsafe { self.ok.deref() })
+		} else {
+			// SAFETY: StaticResult<T, E, false> can only be constructed with error value inside (tracked by the false)
+			Err(unsafe { self.error.deref() })
+		}
+	}
+	pub fn as_mut_result(&mut self) -> Result<&mut T, &mut E> {
+		if IS_OK {
+			// SAFETY: StaticResult<T, E, true> can only be constructed with ok value inside (tracked by the true)
+			Ok(unsafe { self.ok.deref_mut() })
+		} else {
+			// SAFETY: StaticResult<T, E, false> can only be constructed with error value inside (tracked by the false)
+			Err(unsafe { self.error.deref_mut() })
 		}
 	}
 }
