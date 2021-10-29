@@ -66,8 +66,8 @@ use core::ptr::drop_in_place;
 /// impl Builder<true, true> {
 /// 	pub fn build(self) -> Point {
 /// 		Point {
-/// 			x: self.x.get(),
-/// 			y: self.y.get(),
+/// 			x: self.x.into_inner(),
+/// 			y: self.y.into_inner(),
 /// 		}
 /// 	}
 /// }
@@ -88,50 +88,57 @@ impl<T> StaticOption<T, true> {
 		}
 	}
 
-	pub fn get(self) -> T {
+	pub fn into_inner(self) -> T {
 		// SAFETY: StaticOption<T, true> can only be constructed with a value inside (tracked by the `true`)
 		unsafe { self.value.assume_init() }
 	}
 
-	pub fn get_ref(&self) -> &T {
+	pub fn inner_ref(&self) -> &T {
 		// SAFETY: StaticOption<T, true> can only be constructed with a value inside (tracked by the `true`)
 		unsafe { self.value.assume_init_ref() }
 	}
 
-	pub fn get_mut(&mut self) -> &mut T {
+	pub fn inner_mut(&mut self) -> &mut T {
 		// SAFETY: StaticOption<T, true> can only be constructed with a value inside (tracked by the `true`)
 		unsafe { self.value.assume_init_mut() }
 	}
 
 	pub fn as_ref(&self) -> StaticOption<&T, true> {
-		StaticOption::some(self.get_ref())
+		StaticOption::some(self.inner_ref())
 	}
 
 	pub fn as_mut(&mut self) -> StaticOption<&mut T, true> {
-		StaticOption::some(self.get_mut())
+		StaticOption::some(self.inner_mut())
 	}
 
 	pub fn as_pin_ref(self: Pin<&Self>) -> StaticOption<Pin<&T>, true> {
 		// SAFETY: self.get_ref() is guaranteed to be pinned because it comes from `self`
 		// which is pinned
-		unsafe { StaticOption::some(Pin::new_unchecked(self.get_ref().get_ref())) }
+		unsafe { StaticOption::some(Pin::new_unchecked(self.get_ref().inner_ref())) }
 	}
 
 	pub fn as_pin_mut(self: Pin<&mut Self>) -> StaticOption<Pin<&mut T>, true> {
 		// SAFETY: self.get_mut() is guaranteed to be pinned because it comes from `self`
 		// which is pinned
-		unsafe { StaticOption::some(Pin::new_unchecked(self.get_unchecked_mut().get_mut())) }
+		unsafe { StaticOption::some(Pin::new_unchecked(self.get_unchecked_mut().inner_mut())) }
+	}
+
+	pub fn map<U, F>(self, function: F) -> StaticOption<U, true>
+	where
+		F: FnOnce(T) -> U,
+	{
+		StaticOption::some(function(self.into_inner()))
 	}
 
 	pub fn ok_or<E>(self, _error: E) -> StaticResult<T, E, true> {
-		StaticResult::ok(self.get())
+		StaticResult::ok(self.into_inner())
 	}
 
 	pub fn ok_or_else<E, F>(self, _error: F) -> StaticResult<T, E, true>
 	where
 		F: FnOnce() -> E,
 	{
-		StaticResult::ok(self.get())
+		StaticResult::ok(self.into_inner())
 	}
 
 	pub const fn and<U, const STATE: bool>(self, option_b: StaticOption<U, STATE>) -> StaticOption<U, STATE> {
@@ -142,7 +149,7 @@ impl<T> StaticOption<T, true> {
 	where
 		F: FnOnce(T) -> StaticOption<U, STATE>,
 	{
-		function(self.get())
+		function(self.into_inner())
 	}
 
 	pub fn or<const STATE: bool>(self, _option_b: StaticOption<T, STATE>) -> Self {
@@ -157,12 +164,12 @@ impl<T> StaticOption<T, true> {
 	}
 
 	pub fn insert(&mut self, mut value: T) -> &mut T {
-		swap(&mut value, self.get_mut());
-		self.get_mut()
+		swap(&mut value, self.inner_mut());
+		self.inner_mut()
 	}
 
 	pub fn replace(&mut self, mut value: T) -> StaticOption<T, true> {
-		swap(self.get_mut(), &mut value);
+		swap(self.inner_mut(), &mut value);
 		StaticOption::some(value)
 	}
 
@@ -170,21 +177,21 @@ impl<T> StaticOption<T, true> {
 	where
 		T: Default,
 	{
-		self.get()
+		self.into_inner()
 	}
 
 	pub fn as_deref(&self) -> StaticOption<&<T as Deref>::Target, true>
 	where
 		T: Deref,
 	{
-		StaticOption::some(self.get_ref().deref())
+		StaticOption::some(self.inner_ref().deref())
 	}
 
 	pub fn as_deref_mut(&mut self) -> StaticOption<&mut <T as Deref>::Target, true>
 	where
 		T: DerefMut,
 	{
-		StaticOption::some(self.get_mut().deref_mut())
+		StaticOption::some(self.inner_mut().deref_mut())
 	}
 }
 
@@ -193,14 +200,14 @@ impl<'a, T> StaticOption<&'a T, true> {
 	where
 		T: Copy,
 	{
-		StaticOption::some(**self.get_ref())
+		StaticOption::some(**self.inner_ref())
 	}
 
 	pub fn cloned(self) -> StaticOption<T, true>
 	where
 		T: Clone,
 	{
-		StaticOption::some((*self.get_ref()).clone())
+		StaticOption::some((*self.inner_ref()).clone())
 	}
 }
 
@@ -224,6 +231,13 @@ impl<T> StaticOption<T, false> {
 	}
 
 	pub fn as_pin_mut(self: Pin<&mut Self>) -> StaticOption<Pin<&mut T>, false> {
+		StaticOption::none()
+	}
+
+	pub fn map<U, F>(self, _function: F) -> StaticOption<U, false>
+	where
+		F: FnOnce(T) -> U,
+	{
 		StaticOption::none()
 	}
 
@@ -400,7 +414,7 @@ where
 	T: Clone,
 {
 	fn clone(&self) -> Self {
-		StaticOption::some(self.get_ref().clone())
+		StaticOption::some(self.inner_ref().clone())
 	}
 }
 
