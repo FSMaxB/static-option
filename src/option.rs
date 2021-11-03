@@ -78,7 +78,7 @@ use core::ptr::drop_in_place;
 /// ```
 #[must_use = "Call `.drop()` if you don't use the StaticOption, otherwise it's contents never get dropped."]
 pub struct StaticOption<T, const IS_SOME: bool> {
-	value: MaybeUninit<T>,
+	pub(crate) value: MaybeUninit<T>,
 }
 
 impl<T> StaticOption<T, true> {
@@ -123,22 +123,15 @@ impl<T> StaticOption<T, true> {
 		unsafe { StaticOption::some(Pin::new_unchecked(self.get_unchecked_mut().inner_mut())) }
 	}
 
-	pub fn map<U, F>(self, function: F) -> StaticOption<U, true>
-	where
-		F: FnOnce(T) -> U,
-	{
-		StaticOption::some(function(self.into_inner()))
-	}
-
 	pub fn ok_or<E>(self, _error: E) -> StaticResult<T, E, true> {
-		StaticResult::ok(self.into_inner())
+		StaticResult::new_ok(self.into_inner())
 	}
 
 	pub fn ok_or_else<E, F>(self, _error: F) -> StaticResult<T, E, true>
 	where
 		F: FnOnce() -> E,
 	{
-		StaticResult::ok(self.into_inner())
+		StaticResult::new_ok(self.into_inner())
 	}
 
 	pub const fn and<U, const IS_SOME: bool>(self, option_b: StaticOption<U, IS_SOME>) -> StaticOption<U, IS_SOME> {
@@ -234,22 +227,15 @@ impl<T> StaticOption<T, false> {
 		StaticOption::none()
 	}
 
-	pub fn map<U, F>(self, _function: F) -> StaticOption<U, false>
-	where
-		F: FnOnce(T) -> U,
-	{
-		StaticOption::none()
-	}
-
 	pub fn ok_or<E>(self, error: E) -> StaticResult<T, E, false> {
-		StaticResult::err(error)
+		StaticResult::new_err(error)
 	}
 
 	pub fn ok_or_else<E, F>(self, error: F) -> StaticResult<T, E, false>
 	where
 		F: FnOnce() -> E,
 	{
-		StaticResult::err(error())
+		StaticResult::new_err(error())
 	}
 
 	pub const fn and<U, const IS_SOME: bool>(self, _option_b: StaticOption<U, IS_SOME>) -> StaticOption<U, false> {
@@ -312,6 +298,31 @@ impl<'a, T> StaticOption<&'a T, false> {
 	}
 }
 
+impl<T, const IS_SOME: bool> StaticOption<StaticOption<T, IS_SOME>, true> {
+	pub fn flatten(self) -> StaticOption<T, IS_SOME> {
+		self.into_inner()
+	}
+}
+
+impl<T, const IS_SOME: bool> StaticOption<StaticOption<T, IS_SOME>, false> {
+	pub fn flatten(self) -> StaticOption<T, false> {
+		StaticOption::none()
+	}
+}
+
+impl<T, E, const IS_OK: bool> StaticOption<StaticResult<T, E, IS_OK>, true> {
+	pub fn transpose(self) -> StaticResult<StaticOption<T, true>, E, IS_OK> {
+		let result = self.into_inner();
+		result.map(StaticOption::some)
+	}
+}
+
+impl<T, E, const IS_OK: bool> StaticOption<StaticResult<T, E, IS_OK>, false> {
+	pub fn transpose(self) -> StaticResult<StaticOption<T, false>, E, true> {
+		StaticResult::new_ok(StaticOption::none())
+	}
+}
+
 impl<T, const IS_SOME: bool> StaticOption<T, IS_SOME> {
 	pub const fn is_some(&self) -> bool {
 		IS_SOME
@@ -343,6 +354,18 @@ impl<T, const IS_SOME: bool> StaticOption<T, IS_SOME> {
 		F: FnOnce() -> T,
 	{
 		self.into_option().unwrap_or_else(function)
+	}
+
+	pub fn map<U, F>(self, f: F) -> StaticOption<U, IS_SOME>
+	where
+		F: FnOnce(T) -> U,
+	{
+		StaticOption {
+			value: self
+				.into_option()
+				.map(f)
+				.map_or_else(MaybeUninit::uninit, MaybeUninit::new),
+		}
 	}
 
 	pub fn map_or<U, F>(self, default: U, function: F) -> U
@@ -394,6 +417,8 @@ impl<T, const IS_SOME: bool> StaticOption<T, IS_SOME> {
 		}
 	}
 }
+
+// TODO: Implement .iter() and .iter_mut()
 
 impl<T> Default for StaticOption<T, false> {
 	fn default() -> Self {
