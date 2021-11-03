@@ -27,21 +27,6 @@ impl<T, E> StaticResult<T, E, true> {
 		StaticOption::none()
 	}
 
-	pub fn as_ref(&self) -> StaticResult<&T, &E, true> {
-		StaticResult::new_ok(self.ok_ref())
-	}
-
-	pub fn as_mut(&mut self) -> StaticResult<&mut T, &mut E, true> {
-		StaticResult::new_ok(self.ok_mut())
-	}
-
-	pub fn map_err<F, O>(self, _op: O) -> StaticResult<T, F, true>
-	where
-		O: FnOnce(E) -> F,
-	{
-		StaticResult::new_ok(self.into_ok())
-	}
-
 	pub fn and<U, const IS_SOME: bool>(self, res: StaticResult<U, E, IS_SOME>) -> StaticResult<U, E, IS_SOME> {
 		res
 	}
@@ -62,20 +47,6 @@ impl<T, E> StaticResult<T, E, true> {
 		O: FnOnce(E) -> StaticResult<T, F, IS_SOME>,
 	{
 		StaticResult::new_ok(self.into_ok())
-	}
-
-	pub fn as_deref(&self) -> StaticResult<&<T as Deref>::Target, &E, true>
-	where
-		T: Deref,
-	{
-		StaticResult::new_ok(self.ok_ref().deref())
-	}
-
-	pub fn as_deref_mut(&mut self) -> StaticResult<&mut <T as Deref>::Target, &E, true>
-	where
-		T: DerefMut,
-	{
-		StaticResult::new_ok(self.ok_mut().deref_mut())
 	}
 
 	pub fn into_ok(self) -> T {
@@ -123,21 +94,6 @@ impl<T, E> StaticResult<T, E, false> {
 		StaticOption::some(self.into_err())
 	}
 
-	pub fn as_ref(&self) -> StaticResult<&T, &E, false> {
-		StaticResult::new_err(self.err_ref())
-	}
-
-	pub fn as_mut(&mut self) -> StaticResult<&mut T, &mut E, false> {
-		StaticResult::new_err(self.err_mut())
-	}
-
-	pub fn map_err<F, O>(self, op: O) -> StaticResult<T, F, false>
-	where
-		O: FnOnce(E) -> F,
-	{
-		StaticResult::new_err(op(self.into_err()))
-	}
-
 	pub fn and<U, const IS_SOME: bool>(self, _res: StaticResult<U, E, IS_SOME>) -> StaticResult<U, E, false> {
 		StaticResult::new_err(self.into_err())
 	}
@@ -158,20 +114,6 @@ impl<T, E> StaticResult<T, E, false> {
 		O: FnOnce(E) -> StaticResult<T, F, IS_SOME>,
 	{
 		op(self.into_err())
-	}
-
-	pub fn as_deref(&self) -> StaticResult<&<T as Deref>::Target, &E, false>
-	where
-		T: Deref,
-	{
-		StaticResult::new_err(self.err_ref())
-	}
-
-	pub fn as_deref_mut(&mut self) -> StaticResult<&mut <T as Deref>::Target, &E, false>
-	where
-		T: DerefMut,
-	{
-		StaticResult::new_err(self.err_mut())
 	}
 
 	pub fn into_err(self) -> E {
@@ -198,6 +140,70 @@ impl<T, E, const IS_OK: bool> StaticResult<T, E, IS_OK> {
 
 	pub const fn is_err(&self) -> bool {
 		!IS_OK
+	}
+
+	pub fn as_ref(&self) -> StaticResult<&T, &E, IS_OK> {
+		match self.as_result() {
+			Ok(ok) => StaticResult {
+				ok: ManuallyDrop::new(ok),
+			},
+			Err(error) => StaticResult {
+				error: ManuallyDrop::new(error),
+			},
+		}
+	}
+
+	pub fn as_mut(&mut self) -> StaticResult<&mut T, &mut E, IS_OK> {
+		match self.as_mut_result() {
+			Ok(ok) => StaticResult {
+				ok: ManuallyDrop::new(ok),
+			},
+			Err(error) => StaticResult {
+				error: ManuallyDrop::new(error),
+			},
+		}
+	}
+
+	pub fn map_err<F, O>(self, op: O) -> StaticResult<T, F, IS_OK>
+	where
+		O: FnOnce(E) -> F,
+	{
+		match self.into_result().map_err(op) {
+			Ok(ok) => StaticResult {
+				ok: ManuallyDrop::new(ok),
+			},
+			Err(error) => StaticResult {
+				error: ManuallyDrop::new(error),
+			},
+		}
+	}
+
+	pub fn as_deref(&self) -> StaticResult<&<T as Deref>::Target, &E, IS_OK>
+	where
+		T: Deref,
+	{
+		match self.as_result() {
+			Ok(ok) => StaticResult {
+				ok: ManuallyDrop::new(ok.deref()),
+			},
+			Err(error) => StaticResult {
+				error: ManuallyDrop::new(error),
+			},
+		}
+	}
+
+	pub fn as_deref_mut(&mut self) -> StaticResult<&mut <T as Deref>::Target, &E, IS_OK>
+	where
+		T: DerefMut,
+	{
+		match self.as_mut_result() {
+			Ok(ok) => StaticResult {
+				ok: ManuallyDrop::new(ok.deref_mut()),
+			},
+			Err(error) => StaticResult {
+				error: ManuallyDrop::new(error),
+			},
+		}
 	}
 
 	pub fn map<U, F>(self, op: F) -> StaticResult<U, E, IS_OK>
@@ -402,14 +408,8 @@ where
 {
 }
 
-impl<T, E> From<StaticResult<T, E, false>> for Result<T, E> {
-	fn from(static_result: StaticResult<T, E, false>) -> Self {
-		Err(static_result.into_err())
-	}
-}
-
-impl<T, E> From<StaticResult<T, E, true>> for Result<T, E> {
-	fn from(static_result: StaticResult<T, E, true>) -> Self {
-		Ok(static_result.into_ok())
+impl<T, E, const IS_OK: bool> From<StaticResult<T, E, IS_OK>> for Result<T, E> {
+	fn from(static_result: StaticResult<T, E, IS_OK>) -> Self {
+		static_result.into_result()
 	}
 }
