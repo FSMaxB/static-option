@@ -1,10 +1,9 @@
-use crate::StaticOption;
+use crate::{Iter, StaticOption};
 use core::cmp::Ordering;
 use core::fmt::Debug;
 use core::hash::{Hash, Hasher};
-use core::mem::ManuallyDrop;
+use core::mem::{ManuallyDrop, MaybeUninit};
 use core::ops::{Deref, DerefMut};
-use core::result::IntoIter;
 
 #[must_use = "Call `.drop()` if you don't use the `StaticResult`, otherwise it's contents never get dropped."]
 pub union StaticResult<T, E, const IS_OK: bool> {
@@ -17,10 +16,6 @@ impl<T, E> StaticResult<T, E, true> {
 		Self {
 			ok: ManuallyDrop::new(ok),
 		}
-	}
-
-	pub fn ok(self) -> StaticOption<T, true> {
-		StaticOption::some(self.into_ok())
 	}
 
 	pub fn err(self) -> StaticOption<E, false> {
@@ -86,10 +81,6 @@ impl<T, E> StaticResult<T, E, false> {
 		}
 	}
 
-	pub fn ok(self) -> StaticOption<T, false> {
-		StaticOption::none()
-	}
-
 	pub fn err(self) -> StaticOption<E, true> {
 		StaticOption::some(self.into_err())
 	}
@@ -140,6 +131,15 @@ impl<T, E, const IS_OK: bool> StaticResult<T, E, IS_OK> {
 
 	pub const fn is_err(&self) -> bool {
 		!IS_OK
+	}
+
+	pub fn ok(self) -> StaticOption<T, IS_OK> {
+		StaticOption {
+			value: match self.into_result().ok() {
+				Some(value) => MaybeUninit::new(value),
+				None => MaybeUninit::uninit(),
+			},
+		}
 	}
 
 	pub fn as_ref(&self) -> StaticResult<&T, &E, IS_OK> {
@@ -235,7 +235,13 @@ impl<T, E, const IS_OK: bool> StaticResult<T, E, IS_OK> {
 		self.into_result().map_or_else(default, f)
 	}
 
-	// TODO: Implement .iter() and .iter_mut()
+	pub fn iter(&self) -> Iter<&T> {
+		self.as_ref().ok().into_iter()
+	}
+
+	pub fn iter_mut(&mut self) -> Iter<&mut T> {
+		self.as_mut().ok().into_iter()
+	}
 
 	pub fn unwrap_or(self, default: T) -> T {
 		self.into_result().unwrap_or(default)
@@ -357,10 +363,10 @@ where
 
 impl<T, E, const IS_OK: bool> IntoIterator for StaticResult<T, E, IS_OK> {
 	type Item = T;
-	type IntoIter = IntoIter<T>;
+	type IntoIter = Iter<T>;
 
 	fn into_iter(self) -> Self::IntoIter {
-		self.into_result().into_iter()
+		self.ok().into_iter()
 	}
 }
 

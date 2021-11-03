@@ -1,10 +1,10 @@
+use crate::iterator::Iter;
 use crate::StaticResult;
 use core::cmp::Ordering;
 use core::fmt::{Debug, Formatter};
 use core::hash::{Hash, Hasher};
 use core::mem::{swap, ManuallyDrop, MaybeUninit};
 use core::ops::{Deref, DerefMut};
-use core::option::IntoIter;
 use core::pin::Pin;
 use core::ptr::drop_in_place;
 
@@ -376,6 +376,14 @@ impl<T, const IS_SOME: bool> StaticOption<T, IS_SOME> {
 		self.into_option().map_or_else(default, function)
 	}
 
+	pub fn iter(&self) -> Iter<&T> {
+		self.as_ref().into_iter()
+	}
+
+	pub fn iter_mut(&mut self) -> Iter<&mut T> {
+		self.as_mut().into_iter()
+	}
+
 	pub fn drop(mut self) {
 		if IS_SOME {
 			// SAFETY: StaticOption<T, true> can only be constructed with a value inside (tracked by the `true`)
@@ -410,8 +418,6 @@ impl<T, const IS_SOME: bool> StaticOption<T, IS_SOME> {
 		}
 	}
 }
-
-// TODO: Implement .iter() and .iter_mut()
 
 impl<T> Default for StaticOption<T, false> {
 	fn default() -> Self {
@@ -489,10 +495,10 @@ where
 
 impl<T, const IS_SOME: bool> IntoIterator for StaticOption<T, IS_SOME> {
 	type Item = T;
-	type IntoIter = IntoIter<T>;
+	type IntoIter = Iter<T>;
 
 	fn into_iter(self) -> Self::IntoIter {
-		self.into_option().into_iter()
+		Iter::new(self.into_option())
 	}
 }
 
