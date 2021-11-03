@@ -8,8 +8,8 @@ use core::result::IntoIter;
 
 #[must_use = "Call `.drop()` if you don't use the `StaticResult`, otherwise it's contents never get dropped."]
 pub union StaticResult<T, E, const IS_OK: bool> {
-	ok: ManuallyDrop<T>,
-	error: ManuallyDrop<E>,
+	pub(crate) ok: ManuallyDrop<T>,
+	pub(crate) error: ManuallyDrop<E>,
 }
 
 impl<T, E> StaticResult<T, E, true> {

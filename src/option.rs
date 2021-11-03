@@ -2,7 +2,7 @@ use crate::StaticResult;
 use core::cmp::Ordering;
 use core::fmt::{Debug, Formatter};
 use core::hash::{Hash, Hasher};
-use core::mem::{swap, MaybeUninit};
+use core::mem::{swap, ManuallyDrop, MaybeUninit};
 use core::ops::{Deref, DerefMut};
 use core::option::IntoIter;
 use core::pin::Pin;
@@ -103,37 +103,6 @@ impl<T> StaticOption<T, true> {
 		unsafe { &mut *self.value.as_mut_ptr() }
 	}
 
-	pub fn as_ref(&self) -> StaticOption<&T, true> {
-		StaticOption::some(self.inner_ref())
-	}
-
-	pub fn as_mut(&mut self) -> StaticOption<&mut T, true> {
-		StaticOption::some(self.inner_mut())
-	}
-
-	pub fn as_pin_ref(self: Pin<&Self>) -> StaticOption<Pin<&T>, true> {
-		// SAFETY: self.get_ref() is guaranteed to be pinned because it comes from `self`
-		// which is pinned
-		unsafe { StaticOption::some(Pin::new_unchecked(self.get_ref().inner_ref())) }
-	}
-
-	pub fn as_pin_mut(self: Pin<&mut Self>) -> StaticOption<Pin<&mut T>, true> {
-		// SAFETY: self.get_mut() is guaranteed to be pinned because it comes from `self`
-		// which is pinned
-		unsafe { StaticOption::some(Pin::new_unchecked(self.get_unchecked_mut().inner_mut())) }
-	}
-
-	pub fn ok_or<E>(self, _error: E) -> StaticResult<T, E, true> {
-		StaticResult::new_ok(self.into_inner())
-	}
-
-	pub fn ok_or_else<E, F>(self, _error: F) -> StaticResult<T, E, true>
-	where
-		F: FnOnce() -> E,
-	{
-		StaticResult::new_ok(self.into_inner())
-	}
-
 	pub const fn and<U, const IS_SOME: bool>(self, option_b: StaticOption<U, IS_SOME>) -> StaticOption<U, IS_SOME> {
 		option_b
 	}
@@ -165,43 +134,6 @@ impl<T> StaticOption<T, true> {
 		swap(self.inner_mut(), &mut value);
 		StaticOption::some(value)
 	}
-
-	pub fn unwrap_or_default(self) -> T
-	where
-		T: Default,
-	{
-		self.into_inner()
-	}
-
-	pub fn as_deref(&self) -> StaticOption<&<T as Deref>::Target, true>
-	where
-		T: Deref,
-	{
-		StaticOption::some(self.inner_ref().deref())
-	}
-
-	pub fn as_deref_mut(&mut self) -> StaticOption<&mut <T as Deref>::Target, true>
-	where
-		T: DerefMut,
-	{
-		StaticOption::some(self.inner_mut().deref_mut())
-	}
-}
-
-impl<'a, T> StaticOption<&'a T, true> {
-	pub fn copied(self) -> StaticOption<T, true>
-	where
-		T: Copy,
-	{
-		StaticOption::some(**self.inner_ref())
-	}
-
-	pub fn cloned(self) -> StaticOption<T, true>
-	where
-		T: Clone,
-	{
-		StaticOption::some((*self.inner_ref()).clone())
-	}
 }
 
 impl<T> StaticOption<T, false> {
@@ -209,33 +141,6 @@ impl<T> StaticOption<T, false> {
 		Self {
 			value: MaybeUninit::uninit(),
 		}
-	}
-
-	pub const fn as_ref(&self) -> StaticOption<&T, false> {
-		StaticOption::none()
-	}
-
-	pub fn as_mut(&mut self) -> StaticOption<&mut T, false> {
-		StaticOption::none()
-	}
-
-	pub fn as_pin_ref(self: Pin<&Self>) -> StaticOption<Pin<&T>, false> {
-		StaticOption::none()
-	}
-
-	pub fn as_pin_mut(self: Pin<&mut Self>) -> StaticOption<Pin<&mut T>, false> {
-		StaticOption::none()
-	}
-
-	pub fn ok_or<E>(self, error: E) -> StaticResult<T, E, false> {
-		StaticResult::new_err(error)
-	}
-
-	pub fn ok_or_else<E, F>(self, error: F) -> StaticResult<T, E, false>
-	where
-		F: FnOnce() -> E,
-	{
-		StaticResult::new_err(error())
 	}
 
 	pub const fn and<U, const IS_SOME: bool>(self, _option_b: StaticOption<U, IS_SOME>) -> StaticOption<U, false> {
@@ -259,42 +164,31 @@ impl<T> StaticOption<T, false> {
 	{
 		function()
 	}
-
-	pub fn unwrap_or_default(self) -> T
-	where
-		T: Default,
-	{
-		T::default()
-	}
-
-	pub fn as_deref(&self) -> StaticOption<&<T as Deref>::Target, false>
-	where
-		T: Deref,
-	{
-		StaticOption::none()
-	}
-
-	pub fn as_deref_mut(&mut self) -> StaticOption<&mut <T as Deref>::Target, false>
-	where
-		T: DerefMut,
-	{
-		StaticOption::none()
-	}
 }
 
-impl<'a, T> StaticOption<&'a T, false> {
-	pub fn copied(self) -> StaticOption<T, false>
+impl<'a, T, const IS_SOME: bool> StaticOption<&'a T, IS_SOME> {
+	pub fn copied(self) -> StaticOption<T, IS_SOME>
 	where
 		T: Copy,
 	{
-		StaticOption::none()
+		StaticOption {
+			value: match self.as_option() {
+				Some(value) => MaybeUninit::new(**value),
+				None => MaybeUninit::uninit(),
+			},
+		}
 	}
 
-	pub fn cloned(self) -> StaticOption<T, false>
+	pub fn cloned(self) -> StaticOption<T, IS_SOME>
 	where
 		T: Clone,
 	{
-		StaticOption::none()
+		StaticOption {
+			value: match self.as_option() {
+				Some(value) => MaybeUninit::new((*value).clone()),
+				None => MaybeUninit::uninit(),
+			},
+		}
 	}
 }
 
@@ -332,16 +226,91 @@ impl<T, const IS_SOME: bool> StaticOption<T, IS_SOME> {
 		!IS_SOME
 	}
 
+	pub fn as_ref(&self) -> StaticOption<&T, IS_SOME> {
+		StaticOption {
+			value: match self.as_option() {
+				Some(value) => MaybeUninit::new(value),
+				None => MaybeUninit::uninit(),
+			},
+		}
+	}
+
+	pub fn as_mut(&mut self) -> StaticOption<&mut T, IS_SOME> {
+		StaticOption {
+			value: match self.as_mut_option() {
+				Some(value) => MaybeUninit::new(value),
+				None => MaybeUninit::uninit(),
+			},
+		}
+	}
+
+	pub fn as_pin_ref(self: Pin<&Self>) -> StaticOption<Pin<&T>, IS_SOME> {
+		StaticOption {
+			// SAFETY: self.get_ref() is guaranteed to be pinned because it comes from `self`
+			// which is pinned
+			value: match self.get_ref().as_option() {
+				Some(value) => MaybeUninit::new(unsafe { Pin::new_unchecked(value) }),
+				None => MaybeUninit::uninit(),
+			},
+		}
+	}
+
+	pub fn as_pin_mut(self: Pin<&mut Self>) -> StaticOption<Pin<&mut T>, IS_SOME> {
+		StaticOption {
+			// SAFETY: self.get_mut_unchecked() is guaranteed to be pinned because it comes from `self`
+			// which is pinned and it will be repinned again.
+			value: match unsafe { self.get_unchecked_mut() }.as_mut_option() {
+				Some(value) => MaybeUninit::new(unsafe { Pin::new_unchecked(value) }),
+				None => MaybeUninit::uninit(),
+			},
+		}
+	}
+
+	pub fn ok_or<E>(self, error: E) -> StaticResult<T, E, IS_SOME> {
+		match self.into_option() {
+			Some(value) => StaticResult {
+				ok: ManuallyDrop::new(value),
+			},
+			None => StaticResult {
+				error: ManuallyDrop::new(error),
+			},
+		}
+	}
+
+	pub fn ok_or_else<E, F>(self, error: F) -> StaticResult<T, E, IS_SOME>
+	where
+		F: FnOnce() -> E,
+	{
+		match self.into_option() {
+			Some(value) => StaticResult {
+				ok: ManuallyDrop::new(value),
+			},
+			None => StaticResult {
+				error: ManuallyDrop::new(error()),
+			},
+		}
+	}
+
+	pub fn unwrap_or_default(self) -> T
+	where
+		T: Default,
+	{
+		match self.into_option() {
+			Some(value) => value,
+			None => T::default(),
+		}
+	}
+
 	pub fn expect(self, message: &str) -> T {
 		self.into_option().expect(message)
 	}
 
 	pub fn unwrap(self) -> T {
-		if IS_SOME {
-			// SAFETY: StaticOption<T, true> can only be constructed with a value inside (tracked by the `true`)
-			unsafe { self.value.assume_init() }
-		} else {
-			panic!("called `StaticOption::unwrap()` on a `None` value")
+		match self.into_option() {
+			Some(value) => value,
+			None => {
+				panic!("called `StaticOption::unwrap()` on a `None` value")
+			}
 		}
 	}
 
@@ -354,6 +323,30 @@ impl<T, const IS_SOME: bool> StaticOption<T, IS_SOME> {
 		F: FnOnce() -> T,
 	{
 		self.into_option().unwrap_or_else(function)
+	}
+
+	pub fn as_deref(&self) -> StaticOption<&<T as Deref>::Target, IS_SOME>
+	where
+		T: Deref,
+	{
+		StaticOption {
+			value: match self.as_option() {
+				Some(value) => MaybeUninit::new(value.deref()),
+				None => MaybeUninit::uninit(),
+			},
+		}
+	}
+
+	pub fn as_deref_mut(&mut self) -> StaticOption<&mut <T as Deref>::Target, IS_SOME>
+	where
+		T: DerefMut,
+	{
+		StaticOption {
+			value: match self.as_mut_option() {
+				Some(value) => MaybeUninit::new(value.deref_mut()),
+				None => MaybeUninit::uninit(),
+			},
+		}
 	}
 
 	pub fn map<U, F>(self, f: F) -> StaticOption<U, IS_SOME>
@@ -434,21 +427,12 @@ impl<T, const IS_SOME: bool> From<StaticOption<T, IS_SOME>> for Option<T> {
 	}
 }
 
-impl<T> Clone for StaticOption<T, true>
+impl<T, const IS_SOME: bool> Clone for StaticOption<T, IS_SOME>
 where
 	T: Clone,
 {
 	fn clone(&self) -> Self {
-		StaticOption::some(self.inner_ref().clone())
-	}
-}
-
-impl<T> Clone for StaticOption<T, false>
-where
-	T: Clone,
-{
-	fn clone(&self) -> Self {
-		StaticOption::none()
+		self.as_ref().cloned()
 	}
 }
 
@@ -464,26 +448,14 @@ where
 	}
 }
 
-impl<'a, T> From<&'a StaticOption<T, true>> for StaticOption<&'a T, true> {
-	fn from(static_option: &'a StaticOption<T, true>) -> Self {
+impl<'a, T, const IS_SOME: bool> From<&'a StaticOption<T, IS_SOME>> for StaticOption<&'a T, IS_SOME> {
+	fn from(static_option: &'a StaticOption<T, IS_SOME>) -> Self {
 		static_option.as_ref()
 	}
 }
 
-impl<'a, T> From<&'a StaticOption<T, false>> for StaticOption<&'a T, false> {
-	fn from(static_option: &'a StaticOption<T, false>) -> Self {
-		static_option.as_ref()
-	}
-}
-
-impl<'a, T> From<&'a mut StaticOption<T, true>> for StaticOption<&'a mut T, true> {
-	fn from(static_option: &'a mut StaticOption<T, true>) -> Self {
-		static_option.as_mut()
-	}
-}
-
-impl<'a, T> From<&'a mut StaticOption<T, false>> for StaticOption<&'a mut T, false> {
-	fn from(static_option: &'a mut StaticOption<T, false>) -> Self {
+impl<'a, T, const IS_SOME: bool> From<&'a mut StaticOption<T, IS_SOME>> for StaticOption<&'a mut T, IS_SOME> {
+	fn from(static_option: &'a mut StaticOption<T, IS_SOME>) -> Self {
 		static_option.as_mut()
 	}
 }
@@ -553,5 +525,4 @@ where
 	}
 }
 
-impl<T> Copy for StaticOption<T, true> where T: Copy {}
-impl<T> Copy for StaticOption<T, false> where T: Copy {}
+impl<T, const IS_SOME: bool> Copy for StaticOption<T, IS_SOME> where T: Copy {}
