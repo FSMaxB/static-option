@@ -1,6 +1,6 @@
 use crate::{Iter, StaticOption};
 use core::cmp::Ordering;
-use core::fmt::Debug;
+use core::fmt::{Debug, Formatter};
 use core::hash::{Hash, Hasher};
 use core::mem::{ManuallyDrop, MaybeUninit};
 use core::ops::{Deref, DerefMut};
@@ -417,5 +417,18 @@ where
 impl<T, E, const IS_OK: bool> From<StaticResult<T, E, IS_OK>> for Result<T, E> {
 	fn from(static_result: StaticResult<T, E, IS_OK>) -> Self {
 		static_result.into_result()
+	}
+}
+
+impl<T, E, const IS_OK: bool> Debug for StaticResult<T, E, IS_OK>
+where
+	T: Debug,
+	E: Debug,
+{
+	fn fmt(&self, formatter: &mut Formatter<'_>) -> core::fmt::Result {
+		match self.as_result() {
+			Ok(ok) => formatter.debug_tuple("StaticResult::ok").field(ok).finish(),
+			Err(error) => formatter.debug_tuple("StaticOption::err").field(error).finish(),
+		}
 	}
 }
