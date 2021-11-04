@@ -12,17 +12,17 @@ pub union StaticResult<T, E, const IS_OK: bool> {
 }
 
 impl<T, E> StaticResult<T, E, true> {
-	pub fn new_ok(ok: T) -> StaticResult<T, E, true> {
+	pub const fn new_ok(ok: T) -> StaticResult<T, E, true> {
 		Self {
 			ok: ManuallyDrop::new(ok),
 		}
 	}
 
-	pub fn err(self) -> StaticOption<E, false> {
+	pub const fn err(self) -> StaticOption<E, false> {
 		StaticOption::none()
 	}
 
-	pub fn and<U, const IS_SOME: bool>(self, res: StaticResult<U, E, IS_SOME>) -> StaticResult<U, E, IS_SOME> {
+	pub const fn and<U, const IS_SOME: bool>(self, res: StaticResult<U, E, IS_SOME>) -> StaticResult<U, E, IS_SOME> {
 		res
 	}
 
@@ -33,7 +33,7 @@ impl<T, E> StaticResult<T, E, true> {
 		op(self.into_ok())
 	}
 
-	pub fn or<F, const IS_SOME: bool>(self, _res: StaticResult<T, F, IS_SOME>) -> StaticResult<T, F, true> {
+	pub const fn or<F, const IS_SOME: bool>(self, _res: StaticResult<T, F, IS_SOME>) -> StaticResult<T, F, true> {
 		StaticResult::new_ok(self.into_ok())
 	}
 
@@ -44,7 +44,7 @@ impl<T, E> StaticResult<T, E, true> {
 		StaticResult::new_ok(self.into_ok())
 	}
 
-	pub fn into_ok(self) -> T {
+	pub const fn into_ok(self) -> T {
 		// SAFETY: StaticResult<T, E, true> can only be constructed with ok value inside (tracked by the true)
 		// and it's insides are never dropped without dropping the entire StaticResult
 		unsafe { ManuallyDrop::into_inner(self.ok) }
@@ -75,17 +75,17 @@ impl<T, E, const IS_SOME: bool> StaticResult<StaticOption<T, IS_SOME>, E, false>
 }
 
 impl<T, E> StaticResult<T, E, false> {
-	pub fn new_err(error: E) -> StaticResult<T, E, false> {
+	pub const fn new_err(error: E) -> StaticResult<T, E, false> {
 		Self {
 			error: ManuallyDrop::new(error),
 		}
 	}
 
-	pub fn err(self) -> StaticOption<E, true> {
+	pub const fn err(self) -> StaticOption<E, true> {
 		StaticOption::some(self.into_err())
 	}
 
-	pub fn and<U, const IS_SOME: bool>(self, _res: StaticResult<U, E, IS_SOME>) -> StaticResult<U, E, false> {
+	pub const fn and<U, const IS_SOME: bool>(self, _res: StaticResult<U, E, IS_SOME>) -> StaticResult<U, E, false> {
 		StaticResult::new_err(self.into_err())
 	}
 
@@ -96,7 +96,7 @@ impl<T, E> StaticResult<T, E, false> {
 		StaticResult::new_err(self.into_err())
 	}
 
-	pub fn or<F, const IS_SOME: bool>(self, res: StaticResult<T, F, IS_SOME>) -> StaticResult<T, F, IS_SOME> {
+	pub const fn or<F, const IS_SOME: bool>(self, res: StaticResult<T, F, IS_SOME>) -> StaticResult<T, F, IS_SOME> {
 		res
 	}
 
@@ -107,7 +107,7 @@ impl<T, E> StaticResult<T, E, false> {
 		op(self.into_err())
 	}
 
-	pub fn into_err(self) -> E {
+	pub const fn into_err(self) -> E {
 		// SAFETY: StaticResult<T, E, false> can only be constructed with error value inside (tracked by the false)
 		// and it's insides are never dropped without dropping the entire StaticResult
 		unsafe { ManuallyDrop::into_inner(self.error) }
@@ -301,7 +301,7 @@ impl<T, E, const IS_OK: bool> StaticResult<T, E, IS_OK> {
 		}
 	}
 
-	pub fn into_result(self) -> Result<T, E> {
+	pub const fn into_result(self) -> Result<T, E> {
 		if IS_OK {
 			// SAFETY: StaticResult<T, E, true> can only be constructed with ok value inside (tracked by the true)
 			Ok(ManuallyDrop::into_inner(unsafe { self.ok }))
