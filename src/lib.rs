@@ -1,5 +1,6 @@
 #![no_std]
 #![allow(clippy::tabs_in_doc_comments)]
+#![doc = include_str!("../README.md")]
 
 mod iterator;
 mod option;
