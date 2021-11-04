@@ -544,7 +544,7 @@ impl<T, E, const IS_OK: bool> StaticOption<StaticResult<T, E, IS_OK>, false> {
 	/// let option = StaticOption::<StaticResult<i32, &'static str, false>, false>::none();
 	/// assert_eq!(StaticResult::new_ok(StaticOption::none()), option.transpose());
 	/// ```
-	pub const fn transpose(self) -> StaticResult<StaticOption<T, false>, E, true> {
+	pub fn transpose(self) -> StaticResult<StaticOption<T, false>, E, true> {
 		StaticResult::new_ok(StaticOption::none())
 	}
 }
