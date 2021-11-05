@@ -36,15 +36,15 @@ jobs:
       - name: Test
         run: cargo test
   test_msrv:
-    name: Test with MSRV 1.51
+    name: Test with MSRV 1.56
     runs-on: ubuntu-latest
     steps:
       - name: Checkout
         uses: actions/checkout@v2
-      - name: Install MSRV for futures 0.1
+      - name: Install MSRV
         uses: actions-rs/toolchain@v1
         with:
-          toolchain: 1.51.0 # current MSRV for min_const_generics
+          toolchain: 1.56.0 # 2021 edition
           default: true
           profile: minimal
       - name: Test

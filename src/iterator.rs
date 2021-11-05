@@ -3,7 +3,7 @@ pub struct Iter<T> {
 }
 
 impl<T> Iter<T> {
-	pub(crate) fn new(value: Option<T>) -> Self {
+	pub(crate) const fn new(value: Option<T>) -> Self {
 		Self { value }
 	}
 }

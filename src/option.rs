@@ -424,7 +424,7 @@ impl<T, const IS_SOME: bool> StaticOption<StaticOption<T, IS_SOME>, false> {
 	/// let option = StaticOption::<StaticOption::<i32, false>, false>::none();
 	/// assert_eq!(StaticOption::<i32, false>::none(), option.flatten());
 	/// ```
-	pub fn flatten(self) -> StaticOption<T, false> {
+	pub const fn flatten(self) -> StaticOption<T, false> {
 		StaticOption::none()
 	}
 }
@@ -476,7 +476,7 @@ impl<T, E, const IS_OK: bool> StaticOption<StaticResult<T, E, IS_OK>, false> {
 	/// let option = StaticOption::<StaticResult<i32, &'static str, false>, false>::none();
 	/// assert_eq!(StaticResult::new_ok(StaticOption::none()), option.transpose());
 	/// ```
-	pub fn transpose(self) -> StaticResult<StaticOption<T, false>, E, true> {
+	pub const fn transpose(self) -> StaticResult<StaticOption<T, false>, E, true> {
 		StaticResult::new_ok(StaticOption::none())
 	}
 }
