@@ -5,9 +5,7 @@
 ## Features
 * Statically tracks if a `StaticOption` contains a value or a `StaticResult` is `ok` or `err` at compile time.
 * Direct access to the contents of `StaticOption` and `StaticResult` if the type parameters guarantee that there is a value inside.
-* Optimal memory layout using `unsafe` internally and exposing a safe interface so that you don't have to write `unsafe` yourself
-  * `StaticOption` uses `MaybeUninit`
-  * `StaticResult` uses a `union`
+* Optimal memory layout using a union internally and exposing a safe interface so that you don't have to write `unsafe` yourself
 * MSRV (minimum supported rust version) of 1.56, where 2021 edition was introduced.
 * All standard library functions and traits of `Option` and `Result` that can be reimplement for `StaticOption` and `StaticResult` are reimplemented. (if one is missing, open a GitHub issue about it)
 * `#![no_std]`

@@ -1,8 +1,8 @@
-use crate::{Iter, StaticOption};
+use crate::{const_assert, Iter, StaticOption};
 use core::cmp::Ordering;
 use core::fmt::{Debug, Formatter};
 use core::hash::{Hash, Hasher};
-use core::mem::{ManuallyDrop, MaybeUninit};
+use core::mem::ManuallyDrop;
 use core::ops::{Deref, DerefMut};
 
 #[must_use = "Call `.drop()` if you don't use the `StaticResult`, otherwise it's contents never get dropped."]
@@ -13,16 +13,11 @@ pub union StaticResult<T, E, const IS_OK: bool> {
 
 impl<T, E> StaticResult<T, E, true> {
 	pub const fn new_ok(ok: T) -> StaticResult<T, E, true> {
-		Self {
-			ok: ManuallyDrop::new(ok),
-		}
+		StaticResult::create_ok(ok)
 	}
 
-	pub const fn err(self) -> StaticOption<E, false> {
-		StaticOption::none()
-	}
-
-	pub const fn and<U, const IS_SOME: bool>(self, res: StaticResult<U, E, IS_SOME>) -> StaticResult<U, E, IS_SOME> {
+	pub fn and<U, const IS_SOME: bool>(self, res: StaticResult<U, E, IS_SOME>) -> StaticResult<U, E, IS_SOME> {
+		self.drop();
 		res
 	}
 
@@ -33,7 +28,8 @@ impl<T, E> StaticResult<T, E, true> {
 		op(self.into_ok())
 	}
 
-	pub const fn or<F, const IS_SOME: bool>(self, _res: StaticResult<T, F, IS_SOME>) -> StaticResult<T, F, true> {
+	pub fn or<F, const IS_SOME: bool>(self, res: StaticResult<T, F, IS_SOME>) -> StaticResult<T, F, true> {
+		res.drop();
 		StaticResult::new_ok(self.into_ok())
 	}
 
@@ -45,26 +41,27 @@ impl<T, E> StaticResult<T, E, true> {
 	}
 
 	pub const fn into_ok(self) -> T {
-		// SAFETY: StaticResult<T, E, true> can only be constructed with ok value inside (tracked by the true)
-		// and it's insides are never dropped without dropping the entire StaticResult
-		unsafe { ManuallyDrop::into_inner(self.ok) }
+		self.inner_ok()
 	}
 
 	pub fn ok_ref(&self) -> &T {
-		// SAFETY: StaticResult<T, E, true> can only be constructed with ok value inside (tracked by the true)
-		unsafe { &self.ok }
+		self.as_ok()
 	}
 
 	pub fn ok_mut(&mut self) -> &mut T {
-		// SAFETY: StaticResult<T, E, true> can only be constructed with ok value inside (tracked by the true)
-		unsafe { &mut self.ok }
+		self.as_ok_mut()
 	}
 }
 
 impl<T, E, const IS_SOME: bool> StaticResult<StaticOption<T, IS_SOME>, E, true> {
 	pub fn transpose(self) -> StaticOption<StaticResult<T, E, true>, IS_SOME> {
 		let option = self.into_ok();
-		option.map(StaticResult::new_ok)
+		if IS_SOME {
+			StaticOption::new_some(StaticResult::create_ok(option.inner()))
+		} else {
+			option.drop();
+			StaticOption::new_none()
+		}
 	}
 }
 
@@ -76,16 +73,11 @@ impl<T, E, const IS_SOME: bool> StaticResult<StaticOption<T, IS_SOME>, E, false>
 
 impl<T, E> StaticResult<T, E, false> {
 	pub const fn new_err(error: E) -> StaticResult<T, E, false> {
-		Self {
-			error: ManuallyDrop::new(error),
-		}
+		StaticResult::create_err(error)
 	}
 
-	pub const fn err(self) -> StaticOption<E, true> {
-		StaticOption::some(self.into_err())
-	}
-
-	pub const fn and<U, const IS_SOME: bool>(self, _res: StaticResult<U, E, IS_SOME>) -> StaticResult<U, E, false> {
+	pub fn and<U, const IS_SOME: bool>(self, res: StaticResult<U, E, IS_SOME>) -> StaticResult<U, E, false> {
+		res.drop();
 		StaticResult::new_err(self.into_err())
 	}
 
@@ -96,7 +88,8 @@ impl<T, E> StaticResult<T, E, false> {
 		StaticResult::new_err(self.into_err())
 	}
 
-	pub const fn or<F, const IS_SOME: bool>(self, res: StaticResult<T, F, IS_SOME>) -> StaticResult<T, F, IS_SOME> {
+	pub fn or<F, const IS_SOME: bool>(self, res: StaticResult<T, F, IS_SOME>) -> StaticResult<T, F, IS_SOME> {
+		self.drop();
 		res
 	}
 
@@ -108,19 +101,15 @@ impl<T, E> StaticResult<T, E, false> {
 	}
 
 	pub const fn into_err(self) -> E {
-		// SAFETY: StaticResult<T, E, false> can only be constructed with error value inside (tracked by the false)
-		// and it's insides are never dropped without dropping the entire StaticResult
-		unsafe { ManuallyDrop::into_inner(self.error) }
+		self.inner_error()
 	}
 
 	pub fn err_ref(&self) -> &E {
-		// SAFETY: StaticResult<T, E, false> can only be constructed with error value inside (tracked by the false)
-		unsafe { &self.error }
+		self.as_error()
 	}
 
 	pub fn err_mut(&mut self) -> &mut E {
-		// SAFETY: StaticResult<T, E, false> can only be constructed with error value inside (tracked by the false)
-		unsafe { &mut self.error }
+		self.as_error_mut()
 	}
 }
 
@@ -133,34 +122,34 @@ impl<T, E, const IS_OK: bool> StaticResult<T, E, IS_OK> {
 		!IS_OK
 	}
 
-	pub fn ok(self) -> StaticOption<T, IS_OK> {
-		StaticOption {
-			value: match self.into_result().ok() {
-				Some(value) => MaybeUninit::new(value),
-				None => MaybeUninit::uninit(),
-			},
+	pub const fn ok(self) -> StaticOption<T, IS_OK> {
+		if IS_OK {
+			StaticOption::new_some(self.inner_ok())
+		} else {
+			StaticOption::new_none()
+		}
+	}
+
+	pub fn err(self) -> StaticOption<E, true> {
+		if IS_OK {
+			self.drop();
+			StaticOption::new_none()
+		} else {
+			StaticOption::new_some(self.inner_error())
 		}
 	}
 
 	pub fn as_ref(&self) -> StaticResult<&T, &E, IS_OK> {
 		match self.as_result() {
-			Ok(ok) => StaticResult {
-				ok: ManuallyDrop::new(ok),
-			},
-			Err(error) => StaticResult {
-				error: ManuallyDrop::new(error),
-			},
+			Ok(ok) => StaticResult::create_ok(ok),
+			Err(error) => StaticResult::create_err(error),
 		}
 	}
 
 	pub fn as_mut(&mut self) -> StaticResult<&mut T, &mut E, IS_OK> {
 		match self.as_mut_result() {
-			Ok(ok) => StaticResult {
-				ok: ManuallyDrop::new(ok),
-			},
-			Err(error) => StaticResult {
-				error: ManuallyDrop::new(error),
-			},
+			Ok(ok) => StaticResult::create_ok(ok),
+			Err(error) => StaticResult::create_err(error),
 		}
 	}
 
@@ -169,12 +158,8 @@ impl<T, E, const IS_OK: bool> StaticResult<T, E, IS_OK> {
 		O: FnOnce(E) -> F,
 	{
 		match self.into_result().map_err(op) {
-			Ok(ok) => StaticResult {
-				ok: ManuallyDrop::new(ok),
-			},
-			Err(error) => StaticResult {
-				error: ManuallyDrop::new(error),
-			},
+			Ok(ok) => StaticResult::create_ok(ok),
+			Err(error) => StaticResult::create_err(error),
 		}
 	}
 
@@ -183,12 +168,8 @@ impl<T, E, const IS_OK: bool> StaticResult<T, E, IS_OK> {
 		T: Deref,
 	{
 		match self.as_result() {
-			Ok(ok) => StaticResult {
-				ok: ManuallyDrop::new(ok.deref()),
-			},
-			Err(error) => StaticResult {
-				error: ManuallyDrop::new(error),
-			},
+			Ok(ok) => StaticResult::create_ok(ok.deref()),
+			Err(error) => StaticResult::create_err(error),
 		}
 	}
 
@@ -197,12 +178,8 @@ impl<T, E, const IS_OK: bool> StaticResult<T, E, IS_OK> {
 		T: DerefMut,
 	{
 		match self.as_mut_result() {
-			Ok(ok) => StaticResult {
-				ok: ManuallyDrop::new(ok.deref_mut()),
-			},
-			Err(error) => StaticResult {
-				error: ManuallyDrop::new(error),
-			},
+			Ok(ok) => StaticResult::create_ok(ok.deref_mut()),
+			Err(error) => StaticResult::create_err(error),
 		}
 	}
 
@@ -211,12 +188,8 @@ impl<T, E, const IS_OK: bool> StaticResult<T, E, IS_OK> {
 		F: FnOnce(T) -> U,
 	{
 		match self.into_result().map(op) {
-			Ok(ok) => StaticResult {
-				ok: ManuallyDrop::new(ok),
-			},
-			Err(error) => StaticResult {
-				error: ManuallyDrop::new(error),
-			},
+			Ok(ok) => StaticResult::create_ok(ok),
+			Err(error) => StaticResult::create_err(error),
 		}
 	}
 
@@ -305,31 +278,100 @@ impl<T, E, const IS_OK: bool> StaticResult<T, E, IS_OK> {
 
 	pub const fn into_result(self) -> Result<T, E> {
 		if IS_OK {
-			// SAFETY: StaticResult<T, E, true> can only be constructed with ok value inside (tracked by the true)
-			Ok(ManuallyDrop::into_inner(unsafe { self.ok }))
+			Ok(self.inner_ok())
 		} else {
-			// SAFETY: StaticResult<T, E, false> can only be constructed with error value inside (tracked by the false)
-			Err(ManuallyDrop::into_inner(unsafe { self.error }))
+			Err(self.inner_error())
 		}
 	}
 
 	pub fn as_result(&self) -> Result<&T, &E> {
 		if IS_OK {
-			// SAFETY: StaticResult<T, E, true> can only be constructed with ok value inside (tracked by the true)
-			Ok(unsafe { self.ok.deref() })
+			Ok(self.as_ok())
 		} else {
-			// SAFETY: StaticResult<T, E, false> can only be constructed with error value inside (tracked by the false)
-			Err(unsafe { self.error.deref() })
+			Err(self.as_error())
 		}
 	}
+
 	pub fn as_mut_result(&mut self) -> Result<&mut T, &mut E> {
 		if IS_OK {
-			// SAFETY: StaticResult<T, E, true> can only be constructed with ok value inside (tracked by the true)
-			Ok(unsafe { self.ok.deref_mut() })
+			Ok(self.as_ok_mut())
 		} else {
-			// SAFETY: StaticResult<T, E, false> can only be constructed with error value inside (tracked by the false)
-			Err(unsafe { self.error.deref_mut() })
+			Err(self.as_error_mut())
 		}
+	}
+
+	// Equivalent to `new_ok` but doesn't require explicit `true` as type parameter.
+	#[inline(always)]
+	pub(crate) const fn create_ok(ok: T) -> Self {
+		// SAFETY: The const_assert ensures that only `StaticResult<T, E, true>` are constructed like this.
+		const_assert(IS_OK); // gets optimized away
+		Self {
+			ok: ManuallyDrop::new(ok),
+		}
+	}
+
+	// Equivalent to `new_err` but doesn't require explicit `false` as type parameter.
+	#[inline(always)]
+	pub(crate) const fn create_err(error: E) -> Self {
+		// SAFETY: The const_assert ensures that only `StaticResult<T, E, true>` are constructed like this.
+		const_assert(!IS_OK); // gets optimized away
+		Self {
+			error: ManuallyDrop::new(error),
+		}
+	}
+
+	// Equivalent to `into_ok` but doesn't require explicit `true` as type parameter.
+	#[inline(always)]
+	pub(crate) const fn inner_ok(self) -> T {
+		// SAFETY: StaticResult<T, E, true> can only be constructed with a value inside (tracked by the `true`)
+		// and the const_assert ensures that the `ok` union field is only accessed when it is initialized
+		const_assert(IS_OK); // gets optimized away
+		ManuallyDrop::into_inner(unsafe { self.ok })
+	}
+
+	// Equivalent to `ok_ref` but doesn't require explicit `true` as type parameter.
+	#[inline(always)]
+	pub(crate) fn as_ok(&self) -> &T {
+		// SAFETY: StaticResult<T, E, true> can only be constructed with a value inside (tracked by the `true`)
+		// and the assert ensures that the `ok` union field is only accessed when it is initialized
+		assert!(IS_OK); // gets optimized away
+		unsafe { &self.ok }
+	}
+
+	// Equivalent to `ok_mut` but doesn't require explicit `true` as type parameter.
+	#[inline(always)]
+	pub(crate) fn as_ok_mut(&mut self) -> &mut T {
+		// SAFETY: StaticResult<T, E, true> can only be constructed with a value inside (tracked by the `true`)
+		// and the assert ensures that the `ok` union field is only accessed when it is initialized
+		assert!(IS_OK); // gets optimized away
+		unsafe { &mut self.ok }
+	}
+
+	// Equivalent to `into_err` but doesn't require explicit `false` as type parameter.
+	#[inline(always)]
+	pub(crate) const fn inner_error(self) -> E {
+		// SAFETY: StaticResult<T, E, false> can only be constructed with a value inside (tracked by the `false`)
+		// and the const_assert ensures that the `error` union field is only accessed when it is initialized
+		const_assert(!IS_OK); // gets optimized away
+		ManuallyDrop::into_inner(unsafe { self.error })
+	}
+
+	// Equivalent to `err_ref` but doesn't require explicit `false` as type parameter.
+	#[inline(always)]
+	pub(crate) fn as_error(&self) -> &E {
+		// SAFETY: StaticResult<T, E, false> can only be constructed with a value inside (tracked by the `false`)
+		// and the assert ensures that the `error` union field is only accessed when it is initialized
+		assert!(!IS_OK);
+		unsafe { &self.error }
+	}
+
+	// Equivalent to `err_mut` but doesn't require explicit `false` as type parameter.
+	#[inline(always)]
+	pub(crate) fn as_error_mut(&mut self) -> &mut E {
+		// SAFETY: StaticResult<T, E, false> can only be constructed with a value inside (tracked by the `false`)
+		// and the assert ensures that the `error` union field is only accessed when it is initialized
+		assert!(!IS_OK);
+		unsafe { &mut self.error }
 	}
 }
 
@@ -340,12 +382,8 @@ where
 {
 	fn clone(&self) -> Self {
 		match self.as_result() {
-			Ok(ok) => Self {
-				ok: ManuallyDrop::new(ok.clone()),
-			},
-			Err(error) => Self {
-				error: ManuallyDrop::new(error.clone()),
-			},
+			Ok(ok) => StaticResult::create_ok(ok.clone()),
+			Err(error) => StaticResult::create_err(error.clone()),
 		}
 	}
 }

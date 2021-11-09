@@ -1,25 +1,25 @@
 use crate::iterator::Iter;
-use crate::StaticResult;
+use crate::{const_assert, StaticResult};
+use core::any::type_name;
 use core::cmp::Ordering;
 use core::fmt::{Debug, Formatter};
 use core::hash::{Hash, Hasher};
-use core::mem::{swap, ManuallyDrop, MaybeUninit};
+use core::mem::{swap, ManuallyDrop};
 use core::ops::{Deref, DerefMut};
 use core::pin::Pin;
-use core::ptr::drop_in_place;
 
+// A union is used instead of `MaybeUninit` because `assume_init` isn't a const fn in Rust 1.56, but union fields *can* be accessed inside a const fn.
 #[must_use = "Call `.drop()` if you don't use the StaticOption, otherwise it's contents never get dropped."]
-pub struct StaticOption<T, const IS_SOME: bool> {
-	pub(crate) value: MaybeUninit<T>,
+pub union StaticOption<T, const IS_SOME: bool> {
+	some: ManuallyDrop<T>,
+	none: (),
 }
 
 impl<T> StaticOption<T, true> {
 	/// Create a [`StaticOption<T, true>`] with a value inside. The `true` type parameter statically tracks
 	/// the fact that a value is inside.
 	pub const fn some(value: T) -> Self {
-		Self {
-			value: MaybeUninit::new(value),
-		}
+		StaticOption::new_some(value)
 	}
 
 	/// Take out the value from a [`StaticOption<T, true>`]. This is possible because the `true` statically guarantees
@@ -32,9 +32,8 @@ impl<T> StaticOption<T, true> {
 	/// let inner: i32 = option.into_inner();
 	/// assert_eq!(42, inner);
 	/// ```
-	pub fn into_inner(self) -> T {
-		// SAFETY: StaticOption<T, true> can only be constructed with a value inside (tracked by the `true`)
-		unsafe { self.value.assume_init() }
+	pub const fn into_inner(self) -> T {
+		self.inner()
 	}
 
 	/// Take a shared borrow of the value inside a [`StaticOption<T, true>`]. This is possible because the `true` statically guarantees
@@ -48,8 +47,7 @@ impl<T> StaticOption<T, true> {
 	/// assert_eq!(42, *inner);
 	/// ```
 	pub fn inner_ref(&self) -> &T {
-		// SAFETY: StaticOption<T, true> can only be constructed with a value inside (tracked by the `true`)
-		unsafe { &*self.value.as_ptr() }
+		self.as_inner()
 	}
 
 	/// Take a mutable borrow of the value inside a [`StaticOption<T, true>`]. This is possible because the `true` statically guarantees
@@ -64,13 +62,12 @@ impl<T> StaticOption<T, true> {
 	/// assert_eq!(StaticOption::some(1337), option);
 	/// ```
 	pub fn inner_mut(&mut self) -> &mut T {
-		// SAFETY: StaticOption<T, true> can only be constructed with a value inside (tracked by the `true`)
-		unsafe { &mut *self.value.as_mut_ptr() }
+		self.as_inner_mut()
 	}
 
 	/// See [`core::option::Option::and`].
 	///
-	/// Return `option_b`.
+	/// Return `option_b`, dropping `self`.
 	///
 	/// Note that the `and` method on [`StaticOption<T, false>`] behaves differently.
 	///
@@ -90,7 +87,8 @@ impl<T> StaticOption<T, true> {
 	///
 	/// assert_eq!(StaticOption::none(), option_a.and(option_b));
 	/// ```
-	pub const fn and<U, const IS_SOME: bool>(self, option_b: StaticOption<U, IS_SOME>) -> StaticOption<U, IS_SOME> {
+	pub fn and<U, const IS_SOME: bool>(self, option_b: StaticOption<U, IS_SOME>) -> StaticOption<U, IS_SOME> {
+		self.drop();
 		option_b
 	}
 
@@ -123,7 +121,7 @@ impl<T> StaticOption<T, true> {
 
 	/// See [`core::option::Option::or`].
 	///
-	/// Return `self`, ignoring `_option_b`.
+	/// Return `self`, dropping `option_b`.
 	///
 	/// Note that the `or` method on [`StaticOption<T, false>`] behaves differently.
 	///
@@ -141,13 +139,16 @@ impl<T> StaticOption<T, true> {
 	/// let option_b = StaticOption::none();
 	/// assert_eq!(StaticOption::some(42), option.or(option_b));
 	/// ```
-	pub const fn or<const IS_SOME: bool>(self, _option_b: StaticOption<T, IS_SOME>) -> Self {
+	pub fn or<const IS_SOME: bool>(self, option_b: StaticOption<T, IS_SOME>) -> Self {
+		option_b.drop();
 		self
 	}
 
 	/// See [`core::option::Option::or_else`].
 	///
 	/// Return `self`, ignoring `_fallback`.
+	///
+	/// Warning: Since `_fallback` is ignored, any captured `StaticOption` will not be dropped.
 	///
 	/// Note that the `or_else` method on [`StaticOption<T, false>`] behaves differently.
 	///
@@ -215,14 +216,12 @@ impl<T> StaticOption<T, false> {
 	/// Create a [`StaticOption<T, false>`] without any value. The `false` type parameter statically tracks
 	/// the fact that it contains no value.
 	pub const fn none() -> Self {
-		Self {
-			value: MaybeUninit::uninit(),
-		}
+		Self { none: () }
 	}
 
 	/// See [`core::option::Option::and`].
 	///
-	/// Return [`StaticOption<U, false>::none()`], ignoring `_option_b`.
+	/// Return [`StaticOption<U, false>::none()`], dropping `option_b`.
 	///
 	/// Note that the `and` method on [`StaticOption<T, true>`] behaves differently.
 	///
@@ -240,13 +239,15 @@ impl<T> StaticOption<T, false> {
 	/// let option_b = StaticOption::<i32, false>::none();
 	/// assert_eq!(StaticOption::<i32, false>::none(), option.and(option_b));
 	/// ```
-	pub const fn and<U, const IS_SOME: bool>(self, _option_b: StaticOption<U, IS_SOME>) -> StaticOption<U, false> {
+	pub fn and<U, const IS_SOME: bool>(self, option_b: StaticOption<U, IS_SOME>) -> StaticOption<U, false> {
+		option_b.drop();
 		StaticOption::none()
 	}
 
 	/// See [`core::option::Option::and_then`].
 	///
 	/// Return [`StaticOption<U, false>::none()`], ignoring `_mapper`.
+	/// Warning: Since `_mapper` is ignored, any captured `StaticOption` will not be dropped.
 	///
 	/// Note that the `and_then` method on [`StaticOption<T, true>`] behaves differently.
 	///
@@ -290,6 +291,7 @@ impl<T> StaticOption<T, false> {
 	/// assert_eq!(StaticOption::none(), option.or(option_b));
 	/// ```
 	pub const fn or<const IS_SOME: bool>(self, option_b: StaticOption<T, IS_SOME>) -> StaticOption<T, IS_SOME> {
+		// self doesn't need to get dropped since it is none
 		option_b
 	}
 
@@ -315,6 +317,7 @@ impl<T> StaticOption<T, false> {
 	where
 		F: FnOnce() -> StaticOption<T, IS_SOME>,
 	{
+		// self doesn't need to be dropped since it is none
 		fallback()
 	}
 }
@@ -342,11 +345,10 @@ impl<'a, T, const IS_SOME: bool> StaticOption<&'a T, IS_SOME> {
 	where
 		T: Copy,
 	{
-		StaticOption {
-			value: match self.as_option() {
-				Some(value) => MaybeUninit::new(**value),
-				None => MaybeUninit::uninit(),
-			},
+		if IS_SOME {
+			StaticOption::new_some(*self.inner())
+		} else {
+			StaticOption::new_none()
 		}
 	}
 
@@ -372,11 +374,10 @@ impl<'a, T, const IS_SOME: bool> StaticOption<&'a T, IS_SOME> {
 	where
 		T: Clone,
 	{
-		StaticOption {
-			value: match self.as_option() {
-				Some(value) => MaybeUninit::new((*value).clone()),
-				None => MaybeUninit::uninit(),
-			},
+		if IS_SOME {
+			StaticOption::new_some(self.inner().clone())
+		} else {
+			StaticOption::new_none()
 		}
 	}
 }
@@ -400,7 +401,7 @@ impl<T, const IS_SOME: bool> StaticOption<StaticOption<T, IS_SOME>, true> {
 	/// let option = StaticOption::some(StaticOption::<i32, false>::none());
 	/// assert_eq!(StaticOption::<i32, false>::none(), option.flatten());
 	/// ```
-	pub fn flatten(self) -> StaticOption<T, IS_SOME> {
+	pub const fn flatten(self) -> StaticOption<T, IS_SOME> {
 		self.into_inner()
 	}
 }
@@ -425,6 +426,7 @@ impl<T, const IS_SOME: bool> StaticOption<StaticOption<T, IS_SOME>, false> {
 	/// assert_eq!(StaticOption::<i32, false>::none(), option.flatten());
 	/// ```
 	pub const fn flatten(self) -> StaticOption<T, false> {
+		// self doesn't need to be dropped since it is none
 		StaticOption::none()
 	}
 }
@@ -450,9 +452,13 @@ impl<T, E, const IS_OK: bool> StaticOption<StaticResult<T, E, IS_OK>, true> {
 	/// let option = StaticOption::some(StaticResult::<i32, &'static str, false>::new_err("error"));
 	/// assert_eq!(StaticResult::new_err("error"), option.transpose())
 	/// ```
-	pub fn transpose(self) -> StaticResult<StaticOption<T, true>, E, IS_OK> {
+	pub const fn transpose(self) -> StaticResult<StaticOption<T, true>, E, IS_OK> {
 		let result = self.into_inner();
-		result.map(StaticOption::some)
+		if IS_OK {
+			StaticResult::create_ok(StaticOption::new_some(result.inner_ok()))
+		} else {
+			StaticResult::create_err(result.inner_error())
+		}
 	}
 }
 
@@ -477,6 +483,7 @@ impl<T, E, const IS_OK: bool> StaticOption<StaticResult<T, E, IS_OK>, false> {
 	/// assert_eq!(StaticResult::new_ok(StaticOption::none()), option.transpose());
 	/// ```
 	pub const fn transpose(self) -> StaticResult<StaticOption<T, false>, E, true> {
+		// self doesn't need to be dropped since it is none
 		StaticResult::new_ok(StaticOption::none())
 	}
 }
@@ -532,11 +539,10 @@ impl<T, const IS_SOME: bool> StaticOption<T, IS_SOME> {
 	/// assert_eq!(StaticOption::<&i32, false>::none(), option.as_ref());
 	/// ```
 	pub fn as_ref(&self) -> StaticOption<&T, IS_SOME> {
-		StaticOption {
-			value: match self.as_option() {
-				Some(value) => MaybeUninit::new(value),
-				None => MaybeUninit::uninit(),
-			},
+		if IS_SOME {
+			StaticOption::new_some(self.as_inner())
+		} else {
+			StaticOption::new_none()
 		}
 	}
 
@@ -561,44 +567,37 @@ impl<T, const IS_SOME: bool> StaticOption<T, IS_SOME> {
 	/// assert_eq!(StaticOption::<&mut i32, false>::none(), option.as_mut());
 	/// ```
 	pub fn as_mut(&mut self) -> StaticOption<&mut T, IS_SOME> {
-		StaticOption {
-			value: match self.as_mut_option() {
-				Some(value) => MaybeUninit::new(value),
-				None => MaybeUninit::uninit(),
-			},
+		if IS_SOME {
+			StaticOption::new_some(self.as_inner_mut())
+		} else {
+			StaticOption::new_none()
 		}
 	}
 
 	pub fn as_pin_ref(self: Pin<&Self>) -> StaticOption<Pin<&T>, IS_SOME> {
-		StaticOption {
-			// SAFETY: self.get_ref() is guaranteed to be pinned because it comes from `self`
-			// which is pinned
-			value: match self.get_ref().as_option() {
-				Some(value) => MaybeUninit::new(unsafe { Pin::new_unchecked(value) }),
-				None => MaybeUninit::uninit(),
-			},
+		if IS_SOME {
+			// SAFETY: self.get_ref() is guaranteed to be pinned because it comes from `self` which is pinned
+			StaticOption::new_some(unsafe { Pin::new_unchecked(self.get_ref().as_inner()) })
+		} else {
+			StaticOption::new_none()
 		}
 	}
 
 	pub fn as_pin_mut(self: Pin<&mut Self>) -> StaticOption<Pin<&mut T>, IS_SOME> {
-		StaticOption {
+		if IS_SOME {
 			// SAFETY: self.get_mut_unchecked() is guaranteed to be pinned because it comes from `self`
 			// which is pinned and it will be repinned again.
-			value: match unsafe { self.get_unchecked_mut() }.as_mut_option() {
-				Some(value) => MaybeUninit::new(unsafe { Pin::new_unchecked(value) }),
-				None => MaybeUninit::uninit(),
-			},
+			StaticOption::new_some(unsafe { Pin::new_unchecked(self.get_unchecked_mut().as_inner_mut()) })
+		} else {
+			StaticOption::new_none()
 		}
 	}
 
 	pub fn ok_or<E>(self, error: E) -> StaticResult<T, E, IS_SOME> {
-		match self.into_option() {
-			Some(value) => StaticResult {
-				ok: ManuallyDrop::new(value),
-			},
-			None => StaticResult {
-				error: ManuallyDrop::new(error),
-			},
+		if IS_SOME {
+			StaticResult::create_ok(self.inner())
+		} else {
+			StaticResult::create_err(error)
 		}
 	}
 
@@ -606,13 +605,10 @@ impl<T, const IS_SOME: bool> StaticOption<T, IS_SOME> {
 	where
 		F: FnOnce() -> E,
 	{
-		match self.into_option() {
-			Some(value) => StaticResult {
-				ok: ManuallyDrop::new(value),
-			},
-			None => StaticResult {
-				error: ManuallyDrop::new(error()),
-			},
+		if IS_SOME {
+			StaticResult::create_ok(self.inner())
+		} else {
+			StaticResult::create_err(error())
 		}
 	}
 
@@ -620,45 +616,56 @@ impl<T, const IS_SOME: bool> StaticOption<T, IS_SOME> {
 	where
 		T: Default,
 	{
-		match self.into_option() {
-			Some(value) => value,
-			None => T::default(),
+		if IS_SOME {
+			self.inner()
+		} else {
+			T::default()
 		}
 	}
 
 	pub fn expect(self, message: &str) -> T {
-		self.into_option().expect(message)
+		if IS_SOME {
+			self.inner()
+		} else {
+			panic!("{}", message)
+		}
 	}
 
 	pub fn unwrap(self) -> T {
-		match self.into_option() {
-			Some(value) => value,
-			None => {
-				panic!("called `StaticOption::unwrap()` on a `None` value")
-			}
+		if IS_SOME {
+			self.inner()
+		} else {
+			panic!("called `unwrap()` on {}", type_name::<Self>())
 		}
 	}
 
 	pub fn unwrap_or(self, default: T) -> T {
-		self.into_option().unwrap_or(default)
+		if IS_SOME {
+			self.inner()
+		} else {
+			default
+		}
 	}
 
 	pub fn unwrap_or_else<F>(self, function: F) -> T
 	where
 		F: FnOnce() -> T,
 	{
-		self.into_option().unwrap_or_else(function)
+		if IS_SOME {
+			self.inner()
+		} else {
+			function()
+		}
 	}
 
 	pub fn as_deref(&self) -> StaticOption<&<T as Deref>::Target, IS_SOME>
 	where
 		T: Deref,
 	{
-		StaticOption {
-			value: match self.as_option() {
-				Some(value) => MaybeUninit::new(value.deref()),
-				None => MaybeUninit::uninit(),
-			},
+		if IS_SOME {
+			StaticOption::new_some(self.as_inner())
+		} else {
+			StaticOption::new_none()
 		}
 	}
 
@@ -666,39 +673,45 @@ impl<T, const IS_SOME: bool> StaticOption<T, IS_SOME> {
 	where
 		T: DerefMut,
 	{
-		StaticOption {
-			value: match self.as_mut_option() {
-				Some(value) => MaybeUninit::new(value.deref_mut()),
-				None => MaybeUninit::uninit(),
-			},
+		if IS_SOME {
+			StaticOption::new_some(self.as_inner_mut())
+		} else {
+			StaticOption::new_none()
 		}
 	}
 
-	pub fn map<U, F>(self, f: F) -> StaticOption<U, IS_SOME>
+	pub fn map<U, F>(self, mapper: F) -> StaticOption<U, IS_SOME>
 	where
 		F: FnOnce(T) -> U,
 	{
-		StaticOption {
-			value: self
-				.into_option()
-				.map(f)
-				.map_or_else(MaybeUninit::uninit, MaybeUninit::new),
+		if IS_SOME {
+			StaticOption::new_some(mapper(self.inner()))
+		} else {
+			StaticOption::new_none()
 		}
 	}
 
-	pub fn map_or<U, F>(self, default: U, function: F) -> U
+	pub fn map_or<U, F>(self, default: U, mapper: F) -> U
 	where
 		F: FnOnce(T) -> U,
 	{
-		self.into_option().map_or(default, function)
+		if IS_SOME {
+			mapper(self.inner())
+		} else {
+			default
+		}
 	}
 
-	pub fn map_or_else<U, D, F>(self, default: D, function: F) -> U
+	pub fn map_or_else<U, D, F>(self, default: D, mapper: F) -> U
 	where
 		F: FnOnce(T) -> U,
 		D: FnOnce() -> U,
 	{
-		self.into_option().map_or_else(default, function)
+		if IS_SOME {
+			mapper(self.inner())
+		} else {
+			default()
+		}
 	}
 
 	pub fn iter(&self) -> Iter<&T> {
@@ -712,14 +725,13 @@ impl<T, const IS_SOME: bool> StaticOption<T, IS_SOME> {
 	pub fn drop(mut self) {
 		if IS_SOME {
 			// SAFETY: StaticOption<T, true> can only be constructed with a value inside (tracked by the `true`)
-			unsafe { drop_in_place(self.value.as_mut_ptr()) }
+			unsafe { ManuallyDrop::drop(&mut self.some) }
 		}
 	}
 
-	pub fn into_option(self) -> Option<T> {
+	pub const fn into_option(self) -> Option<T> {
 		if IS_SOME {
-			// SAFETY: StaticOption<T, true> can only be constructed with a value inside (tracked by the `true`)
-			Some(unsafe { self.value.assume_init() })
+			Some(self.inner())
 		} else {
 			None
 		}
@@ -727,8 +739,7 @@ impl<T, const IS_SOME: bool> StaticOption<T, IS_SOME> {
 
 	pub fn as_option(&self) -> Option<&T> {
 		if IS_SOME {
-			// SAFETY: StaticOption<T, true> can only be constructed with a value inside (tracked by the `true`)
-			Some(unsafe { &*self.value.as_ptr() })
+			Some(self.as_inner())
 		} else {
 			None
 		}
@@ -736,19 +747,61 @@ impl<T, const IS_SOME: bool> StaticOption<T, IS_SOME> {
 
 	pub fn as_mut_option(&mut self) -> Option<&mut T> {
 		if IS_SOME {
-			// SAFETY: StaticOption<T, true> can only be constructed with a value inside (tracked by the `true`)
-			Some(unsafe { &mut *self.value.as_mut_ptr() })
+			Some(self.as_inner_mut())
 		} else {
 			None
 		}
+	}
+
+	// Equivalent to `some` but doesn't require explicit `true` as type parameter.
+	#[inline(always)]
+	pub(crate) const fn new_some(value: T) -> Self {
+		// SAFETY: The const_assert ensures that only `StaticOption<T, true>` are constructed like this.
+		const_assert(IS_SOME); // gets optimized away
+		Self {
+			some: ManuallyDrop::new(value),
+		}
+	}
+
+	// Equivalent to `none` but doesn't require explicit `false` as type parameter.
+	#[inline(always)]
+	pub(crate) const fn new_none() -> Self {
+		// SAFETY: The const_assert ensures that only `StaticOption<T, false>` are constructed like this.
+		const_assert(!IS_SOME); // gets optimized away
+		Self { none: () }
+	}
+
+	// Equivalent to `into_inner` but doesn't require explicit `true` as type parameter.
+	#[inline(always)]
+	pub(crate) const fn inner(self) -> T {
+		// SAFETY: StaticOption<T, true> can only be constructed with a value inside (tracked by the `true`)
+		// and the const_assert ensures that the `some` union field is only accessed when it is initialized
+		const_assert(IS_SOME); // gets optimized away
+		ManuallyDrop::into_inner(unsafe { self.some })
+	}
+
+	// Equivalent to `inner_ref` but doesn't require explicit `true` as type parameter.
+	#[inline(always)]
+	pub(crate) fn as_inner(&self) -> &T {
+		// SAFETY: StaticOption<T, true> can only be constructed with a value inside (tracked by the `true`)
+		// and the assert ensures that the `some` union field is only accessed when it is initialized
+		assert!(IS_SOME); // gets optimized away
+		unsafe { &self.some }
+	}
+
+	// Equivalent to `inner_mut` but doesn't require explicit `true` as type parameter.
+	#[inline(always)]
+	pub(crate) fn as_inner_mut(&mut self) -> &mut T {
+		// SAFETY: StaticOption<T, true> can only be constructed with a value inside (tracked by the `true`)
+		// and the assert ensures that the `some` union field is only accessed when it is initialized
+		assert!(IS_SOME); // gets optimized away
+		unsafe { &mut self.some }
 	}
 }
 
 impl<T> Default for StaticOption<T, false> {
 	fn default() -> Self {
-		Self {
-			value: MaybeUninit::uninit(),
-		}
+		StaticOption::new_none()
 	}
 }
 
