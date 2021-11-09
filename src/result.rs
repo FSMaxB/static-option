@@ -1,4 +1,5 @@
 use crate::{const_assert, Iter, StaticOption};
+use core::any::type_name;
 use core::cmp::Ordering;
 use core::fmt::{Debug, Formatter};
 use core::hash::{Hash, Hasher};
@@ -54,12 +55,12 @@ impl<T, E> StaticResult<T, E, true> {
 }
 
 impl<T, E, const IS_SOME: bool> StaticResult<StaticOption<T, IS_SOME>, E, true> {
-	pub fn transpose(self) -> StaticOption<StaticResult<T, E, true>, IS_SOME> {
+	pub const fn transpose(self) -> StaticOption<StaticResult<T, E, true>, IS_SOME> {
 		let option = self.into_ok();
 		if IS_SOME {
 			StaticOption::new_some(StaticResult::create_ok(option.inner()))
 		} else {
-			option.drop();
+			// option doesn't need to be dropped since it is none
 			StaticOption::new_none()
 		}
 	}
@@ -122,10 +123,11 @@ impl<T, E, const IS_OK: bool> StaticResult<T, E, IS_OK> {
 		!IS_OK
 	}
 
-	pub const fn ok(self) -> StaticOption<T, IS_OK> {
+	pub fn ok(self) -> StaticOption<T, IS_OK> {
 		if IS_OK {
 			StaticOption::new_some(self.inner_ok())
 		} else {
+			self.drop();
 			StaticOption::new_none()
 		}
 	}
@@ -140,26 +142,29 @@ impl<T, E, const IS_OK: bool> StaticResult<T, E, IS_OK> {
 	}
 
 	pub fn as_ref(&self) -> StaticResult<&T, &E, IS_OK> {
-		match self.as_result() {
-			Ok(ok) => StaticResult::create_ok(ok),
-			Err(error) => StaticResult::create_err(error),
+		if IS_OK {
+			StaticResult::create_ok(self.as_ok())
+		} else {
+			StaticResult::create_err(self.as_error())
 		}
 	}
 
 	pub fn as_mut(&mut self) -> StaticResult<&mut T, &mut E, IS_OK> {
-		match self.as_mut_result() {
-			Ok(ok) => StaticResult::create_ok(ok),
-			Err(error) => StaticResult::create_err(error),
+		if IS_OK {
+			StaticResult::create_ok(self.as_ok_mut())
+		} else {
+			StaticResult::create_err(self.as_error_mut())
 		}
 	}
 
-	pub fn map_err<F, O>(self, op: O) -> StaticResult<T, F, IS_OK>
+	pub fn map_err<F, O>(self, mapper: O) -> StaticResult<T, F, IS_OK>
 	where
 		O: FnOnce(E) -> F,
 	{
-		match self.into_result().map_err(op) {
-			Ok(ok) => StaticResult::create_ok(ok),
-			Err(error) => StaticResult::create_err(error),
+		if IS_OK {
+			StaticResult::create_ok(self.inner_ok())
+		} else {
+			StaticResult::create_err(mapper(self.inner_error()))
 		}
 	}
 
@@ -167,45 +172,57 @@ impl<T, E, const IS_OK: bool> StaticResult<T, E, IS_OK> {
 	where
 		T: Deref,
 	{
-		match self.as_result() {
-			Ok(ok) => StaticResult::create_ok(ok.deref()),
-			Err(error) => StaticResult::create_err(error),
+		if IS_OK {
+			StaticResult::create_ok(self.as_ok().deref())
+		} else {
+			StaticResult::create_err(self.as_error())
 		}
 	}
 
-	pub fn as_deref_mut(&mut self) -> StaticResult<&mut <T as Deref>::Target, &E, IS_OK>
+	pub fn as_deref_mut(&mut self) -> StaticResult<&mut <T as Deref>::Target, &mut E, IS_OK>
 	where
 		T: DerefMut,
 	{
-		match self.as_mut_result() {
-			Ok(ok) => StaticResult::create_ok(ok.deref_mut()),
-			Err(error) => StaticResult::create_err(error),
+		if IS_OK {
+			StaticResult::create_ok(self.as_ok_mut().deref_mut())
+		} else {
+			StaticResult::create_err(self.as_error_mut())
 		}
 	}
 
-	pub fn map<U, F>(self, op: F) -> StaticResult<U, E, IS_OK>
+	pub fn map<U, F>(self, mapper: F) -> StaticResult<U, E, IS_OK>
 	where
 		F: FnOnce(T) -> U,
 	{
-		match self.into_result().map(op) {
-			Ok(ok) => StaticResult::create_ok(ok),
-			Err(error) => StaticResult::create_err(error),
+		if IS_OK {
+			StaticResult::create_ok(mapper(self.inner_ok()))
+		} else {
+			StaticResult::create_err(self.inner_error())
 		}
 	}
 
-	pub fn map_or<U, F>(self, default: U, f: F) -> U
+	pub fn map_or<U, F>(self, default: U, mapper: F) -> U
 	where
 		F: FnOnce(T) -> U,
 	{
-		self.into_result().map_or(default, f)
+		if IS_OK {
+			mapper(self.inner_ok())
+		} else {
+			self.drop();
+			default
+		}
 	}
 
-	pub fn map_or_else<U, D, F>(self, default: D, f: F) -> U
+	pub fn map_or_else<U, D, F>(self, default: D, mapper: F) -> U
 	where
 		F: FnOnce(T) -> U,
 		D: FnOnce(E) -> U,
 	{
-		self.into_result().map_or_else(default, f)
+		if IS_OK {
+			mapper(self.inner_ok())
+		} else {
+			default(self.inner_error())
+		}
 	}
 
 	pub fn iter(&self) -> Iter<&T> {
@@ -217,51 +234,85 @@ impl<T, E, const IS_OK: bool> StaticResult<T, E, IS_OK> {
 	}
 
 	pub fn unwrap_or(self, default: T) -> T {
-		self.into_result().unwrap_or(default)
+		if IS_OK {
+			self.inner_ok()
+		} else {
+			self.drop();
+			default
+		}
 	}
 
-	pub fn unwrap_or_else<F>(self, op: F) -> T
+	pub fn unwrap_or_else<F>(self, default: F) -> T
 	where
 		F: FnOnce(E) -> T,
 	{
-		self.into_result().unwrap_or_else(op)
+		if IS_OK {
+			self.inner_ok()
+		} else {
+			default(self.inner_error())
+		}
 	}
 
-	pub fn expect(self, msg: &str) -> T
+	pub fn expect(self, message: &str) -> T
 	where
 		E: Debug,
 	{
-		self.into_result().expect(msg)
+		if IS_OK {
+			self.inner_ok()
+		} else {
+			self.drop();
+			// TODO: Not quite correct
+			panic!("{}", message)
+		}
 	}
 
 	pub fn unwrap(self) -> T
 	where
 		E: Debug,
 	{
-		// TODO: Update panic error message to not contain `core::result::Result`
-		self.into_result().unwrap()
+		if IS_OK {
+			self.inner_ok()
+		} else {
+			self.drop();
+			panic!("called `unwrap()` on {}", type_name::<Self>())
+		}
 	}
 
-	pub fn expect_err(self, msg: &str) -> E
+	pub fn expect_err(self, message: &str) -> E
 	where
 		T: Debug,
 	{
-		self.into_result().expect_err(msg)
+		if IS_OK {
+			self.drop();
+			// TODO: Not quite correct
+			panic!("{}", message)
+		} else {
+			self.inner_error()
+		}
 	}
 
 	pub fn unwrap_err(self) -> E
 	where
 		T: Debug,
 	{
-		// TODO: Update panic error message to not contain `core::result::Result`
-		self.into_result().unwrap_err()
+		if IS_OK {
+			self.drop();
+			panic!("called `unwrap_err()` on {}", type_name::<Self>())
+		} else {
+			self.inner_error()
+		}
 	}
 
 	pub fn unwrap_or_default(self) -> T
 	where
 		T: Default,
 	{
-		self.into_result().unwrap_or_default()
+		if IS_OK {
+			self.inner_ok()
+		} else {
+			self.drop();
+			T::default()
+		}
 	}
 
 	pub fn drop(mut self) {
@@ -381,9 +432,10 @@ where
 	E: Clone,
 {
 	fn clone(&self) -> Self {
-		match self.as_result() {
-			Ok(ok) => StaticResult::create_ok(ok.clone()),
-			Err(error) => StaticResult::create_err(error.clone()),
+		if IS_OK {
+			StaticResult::create_ok(self.as_ok().clone())
+		} else {
+			StaticResult::create_err(self.as_error().clone())
 		}
 	}
 }
@@ -394,9 +446,10 @@ where
 	E: Hash,
 {
 	fn hash<H: Hasher>(&self, state: &mut H) {
-		match self.as_result() {
-			Ok(ok) => ok.hash(state),
-			Err(error) => error.hash(state),
+		if IS_OK {
+			self.as_ok().hash(state)
+		} else {
+			self.as_error().hash(state)
 		}
 	}
 }
@@ -466,9 +519,13 @@ where
 	E: Debug,
 {
 	fn fmt(&self, formatter: &mut Formatter<'_>) -> core::fmt::Result {
-		match self.as_result() {
-			Ok(ok) => formatter.debug_tuple("StaticResult::ok").field(ok).finish(),
-			Err(error) => formatter.debug_tuple("StaticOption::err").field(error).finish(),
+		if IS_OK {
+			formatter.debug_tuple("StaticResult::ok").field(self.as_ok()).finish()
+		} else {
+			formatter
+				.debug_tuple("StaticOption::err")
+				.field(self.as_error())
+				.finish()
 		}
 	}
 }

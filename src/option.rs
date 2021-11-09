@@ -825,9 +825,13 @@ where
 	T: Debug,
 {
 	fn fmt(&self, formatter: &mut Formatter<'_>) -> core::fmt::Result {
-		match self.as_option() {
-			Some(value) => formatter.debug_tuple("StaticOption::some").field(value).finish(),
-			None => formatter.debug_tuple("StaticOption::none").finish(),
+		if IS_SOME {
+			formatter
+				.debug_tuple("StaticOption::some")
+				.field(self.as_inner())
+				.finish()
+		} else {
+			formatter.debug_tuple("StaticOption::none").finish()
 		}
 	}
 }
