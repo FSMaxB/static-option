@@ -1,5 +1,5 @@
 use crate::iterator::Iter;
-use crate::{const_assert, StaticResult};
+use crate::StaticResult;
 use core::any::type_name;
 use core::cmp::Ordering;
 use core::fmt::{Debug, Formatter};
@@ -756,8 +756,8 @@ impl<T, const IS_SOME: bool> StaticOption<T, IS_SOME> {
 	// Equivalent to `some` but doesn't require explicit `true` as type parameter.
 	#[inline(always)]
 	pub(crate) const fn new_some(value: T) -> Self {
-		// SAFETY: The const_assert ensures that only `StaticOption<T, true>` are constructed like this.
-		const_assert(IS_SOME); // gets optimized away
+		// SAFETY: The assert ensures that only `StaticOption<T, true>` are constructed like this.
+		assert!(IS_SOME); // gets optimized away
 		Self {
 			some: ManuallyDrop::new(value),
 		}
@@ -766,8 +766,8 @@ impl<T, const IS_SOME: bool> StaticOption<T, IS_SOME> {
 	// Equivalent to `none` but doesn't require explicit `false` as type parameter.
 	#[inline(always)]
 	pub(crate) const fn new_none() -> Self {
-		// SAFETY: The const_assert ensures that only `StaticOption<T, false>` are constructed like this.
-		const_assert(!IS_SOME); // gets optimized away
+		// SAFETY: The assert ensures that only `StaticOption<T, false>` are constructed like this.
+		assert!(!IS_SOME); // gets optimized away
 		Self { none: () }
 	}
 
@@ -775,8 +775,8 @@ impl<T, const IS_SOME: bool> StaticOption<T, IS_SOME> {
 	#[inline(always)]
 	pub(crate) const fn inner(self) -> T {
 		// SAFETY: StaticOption<T, true> can only be constructed with a value inside (tracked by the `true`)
-		// and the const_assert ensures that the `some` union field is only accessed when it is initialized
-		const_assert(IS_SOME); // gets optimized away
+		// and the assert ensures that the `some` union field is only accessed when it is initialized
+		assert!(IS_SOME); // gets optimized away
 		ManuallyDrop::into_inner(unsafe { self.some })
 	}
 

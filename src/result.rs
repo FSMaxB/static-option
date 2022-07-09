@@ -1,4 +1,4 @@
-use crate::{const_assert, Iter, StaticOption};
+use crate::{Iter, StaticOption};
 use core::any::type_name;
 use core::cmp::Ordering;
 use core::fmt::{Debug, Formatter};
@@ -354,8 +354,8 @@ impl<T, E, const IS_OK: bool> StaticResult<T, E, IS_OK> {
 	// Equivalent to `new_ok` but doesn't require explicit `true` as type parameter.
 	#[inline(always)]
 	pub(crate) const fn create_ok(ok: T) -> Self {
-		// SAFETY: The const_assert ensures that only `StaticResult<T, E, true>` are constructed like this.
-		const_assert(IS_OK); // gets optimized away
+		// SAFETY: The assert ensures that only `StaticResult<T, E, true>` are constructed like this.
+		assert!(IS_OK); // gets optimized away
 		Self {
 			ok: ManuallyDrop::new(ok),
 		}
@@ -364,8 +364,8 @@ impl<T, E, const IS_OK: bool> StaticResult<T, E, IS_OK> {
 	// Equivalent to `new_err` but doesn't require explicit `false` as type parameter.
 	#[inline(always)]
 	pub(crate) const fn create_err(error: E) -> Self {
-		// SAFETY: The const_assert ensures that only `StaticResult<T, E, true>` are constructed like this.
-		const_assert(!IS_OK); // gets optimized away
+		// SAFETY: The assert ensures that only `StaticResult<T, E, true>` are constructed like this.
+		assert!(!IS_OK); // gets optimized away
 		Self {
 			error: ManuallyDrop::new(error),
 		}
@@ -375,8 +375,8 @@ impl<T, E, const IS_OK: bool> StaticResult<T, E, IS_OK> {
 	#[inline(always)]
 	pub(crate) const fn inner_ok(self) -> T {
 		// SAFETY: StaticResult<T, E, true> can only be constructed with a value inside (tracked by the `true`)
-		// and the const_assert ensures that the `ok` union field is only accessed when it is initialized
-		const_assert(IS_OK); // gets optimized away
+		// and the assert ensures that the `ok` union field is only accessed when it is initialized
+		assert!(IS_OK); // gets optimized away
 		ManuallyDrop::into_inner(unsafe { self.ok })
 	}
 
@@ -402,8 +402,8 @@ impl<T, E, const IS_OK: bool> StaticResult<T, E, IS_OK> {
 	#[inline(always)]
 	pub(crate) const fn inner_error(self) -> E {
 		// SAFETY: StaticResult<T, E, false> can only be constructed with a value inside (tracked by the `false`)
-		// and the const_assert ensures that the `error` union field is only accessed when it is initialized
-		const_assert(!IS_OK); // gets optimized away
+		// and the assert ensures that the `error` union field is only accessed when it is initialized
+		assert!(!IS_OK); // gets optimized away
 		ManuallyDrop::into_inner(unsafe { self.error })
 	}
 
