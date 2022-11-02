@@ -36,7 +36,7 @@ jobs:
       - name: Test
         run: cargo test
   test_msrv:
-    name: Test with MSRV 1.56
+    name: Test with MSRV 1.64
     runs-on: ubuntu-latest
     steps:
       - name: Checkout
@@ -44,7 +44,7 @@ jobs:
       - name: Install MSRV
         uses: actions-rs/toolchain@v1
         with:
-          toolchain: 1.56.0 # 2021 edition
+          toolchain: 1.64
           default: true
           profile: minimal
       - name: Test
